@@ -319,7 +319,7 @@ def add_outro(src, outro, dest, encoder="libx264"):
         fc.append(f"[{n}:a]{afmt}[a1]")
     fc.append("[v0][a0][v1][a1]concat=n=2:v=1:a=1[v][a]")
     venc = ["-c:v", encoder]
-    venc += ["-b:v", "8M"] if "videotoolbox" in encoder else ["-preset", "veryfast", "-crf", "20"]
+    venc += ["-b:v", "6M"] if "videotoolbox" in encoder else ["-preset", "veryfast", "-crf", "21", "-maxrate", "6M", "-bufsize", "12M"]
     run(["ffmpeg", "-y", "-loglevel", "error", *inputs, "-filter_complex", ";".join(fc),
          "-map", "[v]", "-map", "[a]", *venc, "-pix_fmt", "yuv420p", "-profile:v", "high",
          "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-movflags", "+faststart", dest], timeout=1800)
@@ -403,8 +403,15 @@ class TG:
         kb = self.kb(row["media_id"])
         first = files[0]
         try:
-            if first.get("path") and os.path.getsize(first["path"]) < 49_000_000:
-                with open(first["path"], "rb") as f:
+            vpath = first.get("path")
+            if vpath and os.path.getsize(vpath) >= 49_000_000:
+                small = vpath.rsplit(".", 1)[0] + "_preview.mp4"
+                run(["ffmpeg", "-y", "-loglevel", "error", "-i", vpath, "-vf", "scale=540:-2", "-c:v", "libx264",
+                     "-preset", "veryfast", "-crf", "30", "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", small],
+                    timeout=600)
+                vpath = small
+            if vpath and os.path.getsize(vpath) < 49_000_000:
+                with open(vpath, "rb") as f:
                     m = self.call("sendVideo", files={"video": f}, http_timeout=300, chat_id=self.chat,
                                   caption=body, reply_markup=kb, supports_streaming="true")
             elif first.get("url"):
