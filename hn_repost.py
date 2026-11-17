@@ -185,18 +185,26 @@ class IG:
         log.info("access token refreshed")
 
     # ---- publishing
-    def _wait(self, cid, max_wait=900):
-        t0 = time.time()
+    def _wait(self, cid, max_wait=600):
+        t0, last = time.time(), {}
         while time.time() - t0 < max_wait:
-            st = self.get(cid, fields="status_code,status").get("status_code")
+            last = self.get(cid, fields="status_code,status,video_status")
+            st = last.get("status_code")
             if st == "FINISHED":
                 return
             if st in ("ERROR", "EXPIRED"):
-                raise RuntimeError(f"container {cid} status {st}")
+                raise RuntimeError(f"Instagram rejected the video: {last.get('status')}")
+            up = (last.get("video_status") or {}).get("uploading_phase") or {}
+            if up.get("status") == "error":
+                raise RuntimeError(f"upload error: {up.get('errors')}")
             time.sleep(8)
-        raise RuntimeError("timed out waiting for Instagram to process the video")
+        vs = last.get("video_status") or {}
+        raise RuntimeError("timed out waiting for Instagram to process the video "
+                           f"(status: {last.get('status')}; upload: {(vs.get('uploading_phase') or {}).get('status')}, "
+                           f"bytes {(vs.get('uploading_phase') or {}).get('bytes_transferred')}; "
+                           f"processing: {(vs.get('processing_phase') or {}).get('status')})")
 
-    def _upload_video(self, path, media_type, caption=None, carousel_item=False):
+    def _upload_video(self, path, media_type, caption=None, carousel_item=False, attempt=1):
         params = dict(media_type=media_type, upload_type="resumable")
         if caption is not None:
             params["caption"] = caption
@@ -204,14 +212,32 @@ class IG:
             params["share_to_feed"] = "true"
         if carousel_item:
             params["is_carousel_item"] = "true"
-        cid = self.post(f"{self.cfg['ig_user_id']}/media", **params)["id"]
+        j = self.post(f"{self.cfg['ig_user_id']}/media", **params)
+        cid = j["id"]
+        uri = j.get("uri") or f"https://rupload.facebook.com/ig-api-upload/{self.v}/{cid}"
         size = os.path.getsize(path)
         with open(path, "rb") as f:
-            r = requests.post(f"https://rupload.facebook.com/ig-api-upload/{self.v}/{cid}",
-                              headers={"Authorization": f"OAuth {self.tok}", "offset": "0", "file_size": str(size)},
-                              data=f, timeout=600)
-        self._check(r)
-        self._wait(cid)
+            data = f.read()
+        r = requests.post(uri, headers={"Authorization": f"OAuth {self.tok}", "offset": "0",
+                                        "file_size": str(size), "Content-Type": "application/octet-stream"},
+                          data=data, timeout=900)
+        try:
+            res = r.json()
+        except Exception:
+            res = {"raw": r.text[:300]}
+        log.info("upload %s (%d bytes) -> HTTP %s %s", cid, size, r.status_code, str(res)[:300])
+        if r.status_code != 200 or not res.get("success", False):
+            if attempt < 2:
+                time.sleep(10)
+                return self._upload_video(path, media_type, caption, carousel_item, attempt + 1)
+            raise RuntimeError(f"video upload failed: HTTP {r.status_code} {str(res)[:300]}")
+        try:
+            self._wait(cid)
+        except RuntimeError as e:
+            if attempt < 2 and "timed out" in str(e):
+                log.warning("retrying upload after timeout: %s", e)
+                return self._upload_video(path, media_type, caption, carousel_item, attempt + 1)
+            raise
         return cid
 
     def _image(self, url, caption=None, carousel_item=False):
@@ -707,6 +733,11 @@ class Bot:
                 n = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
                 self.tg.text("🔎 Looking for top-performing reels...")
                 self.pick_best(count=n, manual=True); return
+            if txt.strip() == "/retry":
+                n = self.db.execute("UPDATE items SET status='approved', approved_at=?, error=NULL "
+                                    "WHERE status='failed' AND files IS NOT NULL", (time.time(),)).rowcount
+                self.db.commit(); kv_set(self.db, "last_post", 0)
+                self.tg.text(f"🔁 Retrying {n} failed item(s) now."); return
             if txt.strip() == "/check":
                 self.tg.text("🔎 Checking now..."); kv_set(self.db, "last_poll", 0); return
             if self.editing and txt:
@@ -750,7 +781,7 @@ class Bot:
             log.exception("publish failed")
             self.db.execute("UPDATE items SET status='failed', error=? WHERE media_id=?", (str(e), row["media_id"]))
             kv_set(self.db, "last_post", time.time() - gap + 300)   # retry others after 5 min
-            self.tg.text(f"⚠️ Posting failed for {row['permalink']}\n{e}")
+            self.tg.text(f"⚠️ Posting failed for {row['permalink']}\n{e}\n\nSend /retry to try again.")
         self.db.commit()
 
     def maybe_refresh(self):
