@@ -1,6 +1,8 @@
 name: repost-bot
 
 on:
+  push:
+    branches: [main]
   schedule:
     - cron: "*/10 * * * *"     # GitHub may start runs a few minutes late
   workflow_dispatch:
@@ -15,19 +17,20 @@ concurrency:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
       - name: Restore state
         run: |
           mkdir -p data
-          if git fetch --depth 1 origin state 2>/dev/null; then
-            git show origin/state:state.db > data/state.db || true
+          if git fetch --depth 1 origin state; then
+            git show FETCH_HEAD:state.db > data/state.db && echo "state restored" || rm -f data/state.db
           fi
 
       - uses: actions/setup-python@v5
@@ -59,3 +62,9 @@ jobs:
           git add state.db
           git -c user.name=hn-bot -c user.email=hn-bot@users.noreply.github.com commit -qm "state $(date -u +%FT%TZ)"
           git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" state
+
+      - name: Queue next run (keeps the bot running between scheduled runs)
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run bot.yml -R "${{ github.repository }}" --ref main || true

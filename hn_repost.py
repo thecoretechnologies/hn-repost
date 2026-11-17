@@ -264,6 +264,7 @@ def download(url, dest, proxy=False):
     return dest
 
 
+START_TIME = time.time()
 PROXY = None      # set from config "proxy" (e.g. a residential proxy) - used only for unofficial downloads
 STORY_WATCHER = None
 
@@ -766,7 +767,7 @@ class Bot:
     def loop(self, once=False, run_minutes=0):
         log.info("bot started; watching %s", ", ".join(self.cfg["source_accounts"]))
         self.tg.offset = int(kv_get(self.db, "tg_offset", 0))
-        stop_at = time.time() + run_minutes * 60 if run_minutes else None
+        stop_at = START_TIME + run_minutes * 60 if run_minutes else None
         setup_mode = self.tg.chat.startswith("PUT_")
         if setup_mode:
             log.warning("telegram_chat_id not set - send /id to your bot in Telegram to get it")
