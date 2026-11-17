@@ -53,5 +53,11 @@
   "outro_on_stories": true,
   "spare_ig_username": "PUT_SPARE_INSTAGRAM_USERNAME_HERE",
   "spare_ig_session_file": "",
-  "proxy": ""
+  "proxy": "",
+  "best_enabled": true,
+  "best_lookback_days": 30,
+  "best_per_day": 2,
+  "best_hour_ist": 11,
+  "best_min_age_days": 1,
+  "best_scan_limit": 60
 }

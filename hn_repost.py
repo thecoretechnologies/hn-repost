@@ -164,10 +164,16 @@ class IG:
         params["access_token"] = self.tok
         return self._check(requests.post(f"{self.g}/{path}", data=params, timeout=120))
 
-    def recent_media(self, username, limit=12):
+    def recent_media(self, username, limit=12, stats=False):
+        extra = ",like_count,comments_count,view_count" if stats else ""
         fields = ("business_discovery.username(%s){media.limit(%d){id,caption,media_type,media_product_type,"
-                  "media_url,thumbnail_url,permalink,timestamp,children{media_type,media_url}}}" % (username, limit))
-        j = self.get(self.cfg["ig_user_id"], fields=fields)
+                  "media_url,thumbnail_url,permalink,timestamp%s,children{media_type,media_url}}}" % (username, limit, extra))
+        try:
+            j = self.get(self.cfg["ig_user_id"], fields=fields)
+        except RuntimeError:
+            if not stats:
+                raise
+            j = self.get(self.cfg["ig_user_id"], fields=fields.replace(",view_count", ""))
         return j.get("business_discovery", {}).get("media", {}).get("data", [])
 
     def refresh_token(self):
@@ -538,6 +544,70 @@ class Bot:
             self.db.execute("UPDATE items SET status='failed', error=? WHERE media_id=?", (str(e), mid)); self.db.commit()
             self.tg.text(f"⚠️ Couldn't prepare a story from @{user}: {e}")
 
+    # ---- "best of recent" picks
+    @staticmethod
+    def score(m):
+        views = m.get("view_count") or 0
+        likes = m.get("like_count") or 0
+        comments = m.get("comments_count") or 0
+        return (views if views else likes * 20) + comments * 50
+
+    def pick_best(self, count=None, manual=False):
+        count = count or self.cfg.get("best_per_day", 2)
+        days = self.cfg.get("best_lookback_days", 30)
+        min_age = self.cfg.get("best_min_age_days", 1)
+        now = datetime.now(timezone.utc)
+        cands = []
+        for user in self.cfg["source_accounts"]:
+            try:
+                media = self.ig.recent_media(user, limit=self.cfg.get("best_scan_limit", 60), stats=True)
+            except Exception as e:
+                log.error("best: could not read @%s: %s", user, e); continue
+            for m in media:
+                if self.kind_of(m) != "REEL":
+                    continue
+                ts = datetime.strptime(m["timestamp"][:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
+                age = (now - ts).days
+                if age < min_age or age > days:
+                    continue
+                r = self.db.execute("SELECT status FROM items WHERE media_id=? OR fingerprint=?",
+                                    (m["id"], self.fingerprint(m))).fetchone()
+                if r and r["status"] != "seen":
+                    continue          # already offered, posted or rejected
+                cands.append((self.score(m), age, user, m))
+        cands.sort(key=lambda c: c[0], reverse=True)
+        picks = cands[:count]
+        if not picks:
+            if manual:
+                self.tg.text(f"🔎 No new top reels found in the last {days} days.")
+            return
+        self.tg.text(f"🔥 {len(picks)} top-performing reel(s) from the last {days} days, for your approval:")
+        for sc, age, user, m in picks:
+            if not self.db.execute("SELECT 1 FROM items WHERE media_id=?", (m["id"],)).fetchone():
+                self.db.execute("INSERT INTO items(media_id,fingerprint,source,media_type,permalink,original_caption,"
+                                "status,created) VALUES(?,?,?,?,?,?,?,?)",
+                                (m["id"], self.fingerprint(m), user, "REEL", m.get("permalink"), m.get("caption"),
+                                 "new", time.time()))
+            else:
+                self.db.execute("UPDATE items SET status='new', created=? WHERE media_id=?", (time.time(), m["id"]))
+            self.db.commit()
+            stats = []
+            if m.get("view_count"): stats.append(f"{m['view_count']:,} views")
+            if m.get("like_count") is not None: stats.append(f"{m['like_count']:,} likes")
+            if m.get("comments_count") is not None: stats.append(f"{m['comments_count']:,} comments")
+            self.tg.text(f"🏆 @{user} · posted {age} days ago · " + " · ".join(stats))
+            self.prepare(m, user)
+
+    def maybe_pick_best(self):
+        if not self.cfg.get("best_enabled", True):
+            return
+        ist = datetime.now(timezone.utc).timestamp() + 5.5 * 3600
+        ist_dt = datetime.fromtimestamp(ist, timezone.utc)
+        today = ist_dt.strftime("%Y-%m-%d")
+        if ist_dt.hour >= self.cfg.get("best_hour_ist", 11) and kv_get(self.db, "best_date") != today:
+            kv_set(self.db, "best_date", today)
+            self.pick_best()
+
     def build_post_files(self, m):
         mid, kind = m["id"], self.kind_of(m)
         mdir = os.path.join(self.cfg["data_dir"], "media")
@@ -624,6 +694,11 @@ class Bot:
             if txt.strip() == "/status":
                 c = dict(self.db.execute("SELECT status, COUNT(*) n FROM items GROUP BY status").fetchall())
                 self.tg.text("📊 " + ", ".join(f"{k}: {v}" for k, v in c.items())); return
+            if txt.strip().startswith("/best"):
+                parts = txt.split()
+                n = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
+                self.tg.text("🔎 Looking for top-performing reels...")
+                self.pick_best(count=n, manual=True); return
             if txt.strip() == "/check":
                 self.tg.text("🔎 Checking now..."); kv_set(self.db, "last_poll", 0); return
             if self.editing and txt:
@@ -693,6 +768,7 @@ class Bot:
                 kv_set(self.db, "last_poll", time.time())
                 self.maybe_refresh()
                 self.check_sources()
+                self.maybe_pick_best()
             if (not setup_mode and self.stories and
                     time.time() - float(kv_get(self.db, "last_story_poll", 0)) > self.cfg.get("story_poll_minutes", 45) * 60):
                 kv_set(self.db, "last_story_poll", time.time())

@@ -36,7 +36,7 @@ The app can stay in **Development mode** – no Meta review is needed because on
 2. Put the token in `config.json`, start the bot once (step 4), and send `/id` to your bot.
    It replies with your chat id → put it in `config.json` → restart.
 
-Commands you can send the bot: `/status`, `/check` (check the main accounts now), `/id`.
+Commands you can send the bot: `/status`, `/check` (check the main accounts now), `/best` (top reels now), `/id`.
 
 ## 3. Raspberry Pi 5 install
 
@@ -76,6 +76,10 @@ Instagram's official API can't read other accounts' stories, so the bot reads th
 
 Stories are checked every 45 min (`story_poll_minutes`). Photo stories are turned into 6-second video stories; video stories get the outro if they stay under 60 s. Every story comes to Telegram for approval like posts do. If Instagram logs the spare account out, the bot tells you on Telegram – just repeat step 2.
 
+## 3c. Daily top reels
+
+Every day after 11:00 IST the bot scans the last 30 days of reels from both accounts, ranks them by views (or likes when views aren't available) plus comments, and sends you the best 2 that you haven't posted, been offered or rejected yet. Send `/best` (or `/best 5`) to the bot any time to get picks immediately.
+
 ## 4. Settings you may want to change (`config.json`)
 
 | Setting | What it does |
@@ -88,6 +92,7 @@ Stories are checked every 45 min (`story_poll_minutes`). Photo stories are turne
 | `extra_replacements` | Simple word swaps, e.g. `"Najafgarh": "Uttam Nagar"` |
 | `stories_enabled` | `true`/`false` – turn story copying on or off |
 | `story_poll_minutes` | How often stories are checked (45). Don't go below 30 |
+| `best_per_day`, `best_lookback_days`, `best_hour_ist` | Daily top-reel picks: how many, how far back, what time (IST) |
 | `skip_existing_on_first_run` | `true` = ignore posts that already exist when the bot first starts |
 
 ## 5. Things to know
