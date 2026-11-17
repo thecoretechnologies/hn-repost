@@ -4,6 +4,10 @@ on:
   schedule:
     - cron: "*/10 * * * *"     # GitHub may start runs a few minutes late
   workflow_dispatch:
+    inputs:
+      best_now:
+        description: "Send this many top-performing reels right away (0 = no)"
+        default: "0"
 
 concurrency:
   group: repost-bot
@@ -43,7 +47,7 @@ jobs:
           HN_SPARE_IG_USERNAME: ${{ secrets.HN_SPARE_IG_USERNAME }}
           HN_IG_SESSION_B64: ${{ secrets.HN_IG_SESSION_B64 }}
           HN_PROXY: ${{ secrets.HN_PROXY }}
-        run: python hn_repost.py --run-minutes 9
+        run: python hn_repost.py --run-minutes 9 --best-now "${{ github.event.inputs.best_now || 0 }}"
 
       - name: Save state
         if: always()

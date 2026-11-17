@@ -790,6 +790,7 @@ def main():
     ap.add_argument("--config", default=os.path.join(BASE, "config.json"))
     ap.add_argument("--once", action="store_true")
     ap.add_argument("--run-minutes", type=float, default=0, help="stop after N minutes (for GitHub Actions)")
+    ap.add_argument("--best-now", type=int, default=0, help="send N top-performing reels right away")
     ap.add_argument("--test-caption")
     ap.add_argument("--test-outro", nargs=2, metavar=("IN", "OUT"))
     ap.add_argument("-v", action="store_true")
@@ -801,7 +802,12 @@ def main():
     if a.test_outro:
         cfg = load_config(a.config)
         print(add_outro(a.test_outro[0], cfg["outro_path"], a.test_outro[1], cfg["video_encoder"])); return
-    Bot(a.config).loop(once=a.once, run_minutes=a.run_minutes)
+    bot = Bot(a.config)
+    if a.best_now:
+        if kv_get(bot.db, "initialised") is None:
+            bot.check_sources()          # mark existing posts as seen first
+        bot.pick_best(count=a.best_now, manual=True)
+    bot.loop(once=a.once, run_minutes=a.run_minutes)
 
 
 if __name__ == "__main__":
