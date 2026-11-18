@@ -1,0 +1,21 @@
+name: logo-preview
+on:
+  push:
+    branches: [preview-job]
+    paths: [request.txt]
+permissions:
+  contents: write
+jobs:
+  make:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Get state
+        run: git fetch --depth 1 origin state && git show FETCH_HEAD:state.db > state.db
+      - run: pip install -q requests
+      - run: python make_previews.py "$(cat request.txt)"
+      - name: Save previews
+        run: |
+          git add out/*.jpg
+          git -c user.name=hn-bot -c user.email=hn-bot@users.noreply.github.com commit -qm "logo previews"
+          git push -q origin preview-job
