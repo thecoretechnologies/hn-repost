@@ -767,6 +767,36 @@ class Bot:
             self.db.execute("UPDATE items SET status='failed', error=? WHERE media_id=?", (str(e), mid)); self.db.commit()
             self.tg.text(f"⚠️ Couldn't prepare a story from @{user}: {e}")
 
+    def fresh_raw(self, row):
+        """Re-read the source post so download links are fresh (Instagram links expire)."""
+        raw = json.loads(row["raw"]) if row["raw"] else {}
+        try:
+            for m in self.ig.recent_media(row["source"], limit=60):
+                if m["id"] == row["media_id"]:
+                    raw.update(m); break
+        except Exception as e:
+            log.warning("refresh failed for %s: %s", row["media_id"], e)
+        return raw
+
+    def resend_pending(self):
+        rows = self.db.execute("SELECT * FROM items WHERE status='pending' ORDER BY created").fetchall()
+        if not rows:
+            self.tg.text("Nothing is waiting for approval."); return
+        self.tg.text(f"📬 Re-sending {len(rows)} post(s) waiting for your approval:")
+        for row in rows:
+            try:
+                raw = self.fresh_raw(row)
+                files = (self.build_story_files(raw) if row["media_type"] == "STORY" else self.build_post_files(raw))
+                cap = row["caption"] if row["media_type"] == "STORY" else finalize_caption(row["caption"], self.cfg)
+                self.db.execute("UPDATE items SET files=?, raw=?, caption=? WHERE media_id=?",
+                                (json.dumps(files), json.dumps(raw), cap, row["media_id"])); self.db.commit()
+                msg_id = self.tg.send_review(self.row(row["media_id"]), files)
+                self.db.execute("UPDATE items SET tg_message_id=? WHERE media_id=?", (msg_id, row["media_id"]))
+                self.db.commit()
+            except Exception as e:
+                log.exception("resend failed")
+                self.tg.text(f"⚠️ Couldn't re-send {row['permalink']}: {e}")
+
     # ---- already on the store account?
     def load_store_posts(self):
         """Captions + thumbnail hashes of everything already on the store account (cached for 30 min)."""
@@ -990,7 +1020,7 @@ class Bot:
                 return
             if txt.strip() in ("/start", "/id", "/help"):
                 self.tg.text("Commands:\n/best - top-performing reels from the last 30 days\n/best 5 - top 5\n"
-                             "/status - counts\n/check - check the main accounts now\n/retry - re-post failed items"); return
+                             "/pending - re-send everything waiting for approval\n/status - counts\n/check - check the main accounts now\n/retry - re-post failed items"); return
             if txt.strip() == "/status":
                 c = dict(self.db.execute("SELECT status, COUNT(*) n FROM items GROUP BY status").fetchall())
                 self.tg.text("📊 " + ", ".join(f"{k}: {v}" for k, v in c.items())); return
@@ -999,6 +1029,8 @@ class Bot:
                 n = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
                 self.tg.text("🔎 Looking for top-performing reels...")
                 self.pick_best(count=n, manual=True); return
+            if txt.strip() == "/pending":
+                self.resend_pending(); return
             if txt.strip() == "/retry":
                 n = self.db.execute("UPDATE items SET status='approved', approved_at=?, error=NULL "
                                     "WHERE status='failed' AND files IS NOT NULL", (time.time(),)).rowcount
@@ -1027,7 +1059,7 @@ class Bot:
         try:
             files = json.loads(row["files"])
             if any(f.get("path") and not os.path.exists(f["path"]) for f in files) and row["raw"]:
-                raw = json.loads(row["raw"])
+                raw = self.fresh_raw(row) if row["media_type"] != "STORY" else json.loads(row["raw"])
                 log.info("rebuilding media for %s", row["media_id"])
                 if row["media_type"] == "STORY":
                     files = self.build_story_files(raw)
@@ -1075,13 +1107,18 @@ class Bot:
                 continue
             short = code.split("#")[0]           # "CODE#2" lets the same reel be retried again later
             n = self.db.execute("UPDATE items SET status='approved', approved_at=?, error=NULL "
-                                "WHERE permalink LIKE ? AND status IN ('failed','pending')",
+                                "WHERE permalink LIKE ? AND status IN ('failed','pending','approved')",
                                 (time.time(), f"%{short}%")).rowcount
             self.db.commit(); done.add(code)
             if n:
                 kv_set(self.db, "last_post", 0)
                 self.tg.text(f"🔁 Retrying https://www.instagram.com/reel/{short}/ now.")
         kv_set(self.db, "retry_done", json.dumps(sorted(done)))
+        tok = self.cfg.get("resend_pending_token")
+        if tok and kv_get(self.db, "resend_done") != tok:
+            kv_set(self.db, "resend_done", tok)
+            self.maybe_post()          # post anything approved first
+            self.resend_pending()
         stop_at = START_TIME + run_minutes * 60 if run_minutes else None
         setup_mode = self.tg.chat.startswith("PUT_")
         if setup_mode:
