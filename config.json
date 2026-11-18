@@ -10,7 +10,7 @@
     "hoodanutrition_official",
     "fitharyanvi"
   ],
-  "poll_minutes": 20,
+  "poll_minutes": 30,
   "min_minutes_between_posts": 20,
   "auto_post_after_minutes": 0,
   "skip_existing_on_first_run": true,
@@ -102,5 +102,6 @@
   ],
   "resend_pending_token": "2026-11-18a",
   "official_story_accounts": {},
-  "paused": true
+  "paused": false,
+  "manual_mode": true
 }

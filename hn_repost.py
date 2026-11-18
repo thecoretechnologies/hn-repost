@@ -678,11 +678,23 @@ class TG:
             raise RuntimeError(f"Telegram {method}: {j.get('description')}")
         return j["result"]
 
+    def document(self, path, caption=""):
+        with open(path, "rb") as f:
+            return self.call("sendDocument", files={"document": f}, http_timeout=600, chat_id=self.chat,
+                             caption=caption[:1000])
+
     def text(self, msg, **kw):
         return self.call("sendMessage", chat_id=self.chat, text=msg[:4000], **kw)
 
-    @staticmethod
-    def kb(mid):
+    manual = False
+
+    @classmethod
+    def kb(cls, mid):
+        if cls.manual:
+            return json.dumps({"inline_keyboard": [
+                [{"text": "📥 Send files to post", "callback_data": f"now:{mid}"}],
+                [{"text": "✏️ Edit caption", "callback_data": f"ed:{mid}"},
+                 {"text": "❌ Reject", "callback_data": f"no:{mid}"}]]})
         return json.dumps({"inline_keyboard": [
             [{"text": "⚡ Post now", "callback_data": f"now:{mid}"},
              {"text": "✅ Approve (queue)", "callback_data": f"ok:{mid}"}],
@@ -744,6 +756,12 @@ class Bot:
         self.ig = IG(self.cfg, cfg_path)
         self.tg = TG(self.cfg)
         self.editing = None   # media_id waiting for a new caption
+        if self.cfg.get("manual_mode"):
+            TG.manual = True
+            if kv_get(self.db, "manual_init") != "1":
+                kv_set(self.db, "manual_init", "1"); kv_set(self.db, "paused", "0")
+                self.tg.text("📥 Manual posting mode is on: tap “Send files to post” and the bot sends you the "
+                             "finished video, cover and caption to post yourself.")
         global PROXY, STORY_WATCHER
         PROXY = self.cfg.get("proxy") or None
         self.stories = None
@@ -901,6 +919,45 @@ class Bot:
         except Exception as e:
             log.warning("refresh failed for %s: %s", row["media_id"], e)
         return raw
+
+    def fit_for_telegram(self, path):
+        """Telegram bots can send files up to 50 MB; re-encode bigger videos to fit."""
+        if os.path.getsize(path) < 48_000_000:
+            return path
+        dur, _ = probe(path)
+        kbps = int(44_000_000 * 8 / max(dur, 1) / 1000) - 128
+        small = path.rsplit(".", 1)[0] + "_tg.mp4"
+        run(["ffmpeg", "-y", "-loglevel", "error", "-i", path, "-c:v", "libx264", "-preset", "veryfast",
+             "-b:v", f"{kbps}k", "-maxrate", f"{kbps}k", "-bufsize", f"{2 * kbps}k", "-c:a", "aac", "-b:a", "128k",
+             "-movflags", "+faststart", small], timeout=1800)
+        return small
+
+    def send_manual(self, row):
+        """Manual posting: send the finished video, cover, caption and original link as separate messages."""
+        files = json.loads(row["files"]) if row["files"] else []
+        if not files or any(f.get("path") and not os.path.exists(f["path"]) for f in files):
+            raw = self.fresh_raw(row) if row["media_type"] != "STORY" else json.loads(row["raw"] or "{}")
+            files = self.build_story_files(raw) if row["media_type"] == "STORY" else self.build_post_files(raw)
+        kind = {"REEL": "Reel", "STORY": "Story", "IMAGE": "Post", "CAROUSEL": "Carousel"}.get(row["media_type"], "Post")
+        self.tg.text(f"📦 Ready to post manually - {kind} from @{row['source']}")
+        for i, f in enumerate(files, 1):
+            if f.get("path"):
+                self.tg.document(self.fit_for_telegram(f["path"]), f"🎬 {kind} video{f' {i}' if len(files) > 1 else ''}")
+            elif f.get("url"):
+                p = download(f["url"], os.path.join(self.cfg["data_dir"], "media", f"{row['media_id']}_{i}.jpg"))
+                self.tg.document(p, f"🖼 Photo {i}")
+            if f.get("cover") and os.path.exists(f["cover"]):
+                self.tg.document(f["cover"], "🖼 Cover image (Edit cover → Add from camera roll)")
+        if row["media_type"] != "STORY":
+            self.tg.text("👇 Caption - long-press to copy:")
+            self.tg.text(finalize_caption(row["caption"] or "", self.cfg))
+        self.tg.text(f"🔗 Original: {row['permalink']}")
+        for f in files:
+            for k in ("path", "cover"):
+                if f.get(k) and os.path.exists(f[k]):
+                    os.remove(f[k])
+        self.db.execute("UPDATE items SET status='manual_sent', posted_at=? WHERE media_id=?",
+                        (time.time(), row["media_id"])); self.db.commit()
 
     def show_queue(self):
         gap = self.cfg["min_minutes_between_posts"] * 60
@@ -1190,7 +1247,8 @@ class Bot:
                 # jump the queue: front of the line and no waiting gap
                 self.db.execute("UPDATE items SET status='approved', approved_at=0, error=NULL WHERE media_id=?", (mid,))
                 kv_set(self.db, "last_post", 0)
-                note = "Posting now - you'll get the link in a few minutes"
+                note = ("Preparing files - they'll arrive here in a few minutes" if self.cfg.get("manual_mode")
+                        else "Posting now - you'll get the link in a few minutes")
             elif not row or row["status"] != "pending":
                 note = "Already handled"
             elif act == "ok":
@@ -1266,6 +1324,16 @@ class Bot:
 
     # ---- posting
     def maybe_post(self):
+        if self.cfg.get("manual_mode"):
+            for row in self.db.execute("SELECT * FROM items WHERE status='approved' ORDER BY approved_at").fetchall():
+                try:
+                    self.send_manual(row)
+                except Exception as e:
+                    log.exception("manual package failed")
+                    self.db.execute("UPDATE items SET status='failed', error=? WHERE media_id=?", (str(e), row["media_id"]))
+                    self.db.commit()
+                    self.tg.text(f"⚠️ Couldn't prepare {row['permalink']} for manual posting:\n{e}\nSend /retry to try again.")
+            return
         gap = self.cfg["min_minutes_between_posts"] * 60
         last = float(kv_get(self.db, "last_post", 0))
         if time.time() - last < gap:
