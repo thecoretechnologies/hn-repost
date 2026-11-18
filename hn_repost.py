@@ -269,8 +269,15 @@ class IG:
     # ---- publishing
     def _wait(self, cid, max_wait=600):
         t0, last = time.time(), {}
+        fields = "status_code,status,video_status"
         while time.time() - t0 < max_wait:
-            last = self.get(cid, fields="status_code,status,video_status")
+            try:
+                last = self.get(cid, fields=fields)
+            except RuntimeError as e:
+                if "video_status" in str(e) and "video_status" in fields:
+                    fields = "status_code,status"        # not available for URL-fetched videos
+                    continue
+                raise
             st = last.get("status_code")
             if st == "FINISHED":
                 return
@@ -1066,13 +1073,14 @@ class Bot:
         for code in self.cfg.get("retry_codes", []):
             if code in done:
                 continue
+            short = code.split("#")[0]           # "CODE#2" lets the same reel be retried again later
             n = self.db.execute("UPDATE items SET status='approved', approved_at=?, error=NULL "
                                 "WHERE permalink LIKE ? AND status IN ('failed','pending')",
-                                (time.time(), f"%{code}%")).rowcount
+                                (time.time(), f"%{short}%")).rowcount
             self.db.commit(); done.add(code)
             if n:
                 kv_set(self.db, "last_post", 0)
-                self.tg.text(f"🔁 Retrying https://www.instagram.com/reel/{code}/ now.")
+                self.tg.text(f"🔁 Retrying https://www.instagram.com/reel/{short}/ now.")
         kv_set(self.db, "retry_done", json.dumps(sorted(done)))
         stop_at = START_TIME + run_minutes * 60 if run_minutes else None
         setup_mode = self.tg.chat.startswith("PUT_")
