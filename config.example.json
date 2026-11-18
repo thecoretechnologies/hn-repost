@@ -10,7 +10,7 @@
     "hoodanutrition_official",
     "fitharyanvi"
   ],
-  "poll_minutes": 12,
+  "poll_minutes": 20,
   "min_minutes_between_posts": 20,
   "auto_post_after_minutes": 0,
   "skip_existing_on_first_run": true,
@@ -59,5 +59,25 @@
   "best_per_day": 2,
   "best_hour_ist": 11,
   "best_min_age_days": 1,
-  "best_scan_limit": 60
+  "best_scan_limit": 60,
+  "footer_marker": "📍 Hooda Nutrition, Uttam Nagar",
+  "caption_footer": [
+    "📞 WhatsApp: 8527150060, 8527150040",
+    "🏬 Near Nawada Metro Pillar 719"
+  ],
+  "store_hashtags": [
+    "#hoodanutrition",
+    "#uttamnagar",
+    "#uttamnagardelhi",
+    "#nawada",
+    "#dwarka",
+    "#janakpuri",
+    "#westdelhi",
+    "#supplements",
+    "#wheyprotein",
+    "#gym",
+    "#fitness",
+    "#bodybuilding",
+    "#delhigym"
+  ]
 }

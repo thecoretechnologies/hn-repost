@@ -136,6 +136,51 @@ def rewrite_caption(text, cfg):
         out = re.sub(re.escape(a), b, out, flags=re.I)
     return out
 
+HASHTAG_RE = re.compile(r"(?<![\w#])#[\w\u0900-\u097F]+", re.UNICODE)
+MAX_TAGS, MAX_CAPTION = 30, 2200          # Instagram limits - going over makes the post fail
+
+
+def finalize_caption(text, cfg):
+    """Add the store footer + store hashtags, keep the original hashtags, stay under Instagram's limits.
+    Safe to run more than once on the same caption."""
+    text = (text or "").rstrip()
+    marker = cfg.get("footer_marker", "📍 Hooda Nutrition, Uttam Nagar")
+    footer_lines = cfg.get("caption_footer", [])
+    if marker in text:                      # already finalized
+        return text
+    # 1) hashtags: originals first, then store tags, max 30 in total
+    found, seen = [], set()
+    for t in HASHTAG_RE.findall(text):
+        if t.lower() not in seen:
+            seen.add(t.lower()); found.append(t)
+    original_count = len(found)
+    if original_count > MAX_TAGS:           # trim extra original tags from the text itself
+        extra = {t.lower() for t in found[MAX_TAGS:]}
+        text = HASHTAG_RE.sub(lambda m: "" if m.group(0).lower() in extra else m.group(0), text)
+        text = re.sub(r"[ \t]{2,}", " ", text).rstrip()
+        found = found[:MAX_TAGS]
+    add = []
+    for t in cfg.get("store_hashtags", []):
+        t = t if t.startswith("#") else "#" + t
+        if len(found) + len(add) >= MAX_TAGS:
+            break
+        if t.lower() not in seen:
+            seen.add(t.lower()); add.append(t)
+    # 2) footer (skip the phone line if the caption already shows the store numbers)
+    lines = [l for l in footer_lines if not (cfg["my_phone_text"].split(",")[0].strip() in text and "📞" in l)]
+    footer = "\n".join([marker] + lines)
+    parts = [text] if text else []
+    parts.append(footer)
+    if add:
+        parts.append(" ".join(add))
+    out = "\n\n".join(parts)
+    # 3) length limit: shorten the original text, never the footer/tags
+    if len(out) > MAX_CAPTION:
+        tail = "\n\n" + "\n\n".join(parts[1:])
+        room = MAX_CAPTION - len(tail) - 1
+        out = text[:max(room, 0)].rstrip() + "…" + tail
+    return out
+
 # ----------------------------------------------------------------- graph api
 class IG:
     def __init__(self, cfg, cfg_path):
@@ -668,7 +713,7 @@ class Bot:
         mdir = os.path.join(self.cfg["data_dir"], "media")
         try:
             files = self.build_post_files(m)
-            caption = rewrite_caption(m.get("caption"), self.cfg)
+            caption = finalize_caption(rewrite_caption(m.get("caption"), self.cfg), self.cfg)
             self.db.execute("UPDATE items SET caption=?, files=?, raw=?, status='pending' WHERE media_id=?",
                             (caption, json.dumps(files), json.dumps(m), mid))
             self.db.commit()
@@ -768,7 +813,10 @@ class Bot:
                 else:
                     files = self.build_post_files(raw)
                 self.db.execute("UPDATE items SET files=? WHERE media_id=?", (json.dumps(files), row["media_id"]))
-            pid = self.ig.publish_item(row["media_type"], files, row["caption"] or "")
+            cap = row["caption"] or ""
+            if row["media_type"] != "STORY" and self.cfg.get("add_footer_to_edited", True):
+                cap = finalize_caption(cap, self.cfg)
+            pid = self.ig.publish_item(row["media_type"], files, cap)
             link = self.ig.get(pid, fields="permalink").get("permalink", "")
             self.db.execute("UPDATE items SET status='posted', posted_at=?, posted_id=? WHERE media_id=?",
                             (time.time(), pid, row["media_id"]))
