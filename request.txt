@@ -1,3 +1,2 @@
-store:0
-store:2
-# run 10
+debug
+# run 11

@@ -1,0 +1,98 @@
+{
+  "graph_api_version": "v27.0",
+  "ig_user_id": "17841451199740926",
+  "access_token": "(set in GitHub secret HN_ACCESS_TOKEN)",
+  "fb_app_id": "1084388714287870",
+  "fb_app_secret": "NOT_NEEDED_SYSTEM_USER_TOKEN_NEVER_EXPIRES",
+  "telegram_bot_token": "(set in GitHub secret HN_TELEGRAM_TOKEN)",
+  "telegram_chat_id": "5980558587",
+  "source_accounts": [
+    "hoodanutrition_official",
+    "fitharyanvi"
+  ],
+  "poll_minutes": 20,
+  "min_minutes_between_posts": 20,
+  "auto_post_after_minutes": 0,
+  "skip_existing_on_first_run": true,
+  "outro_path": "assets/outro.mp4",
+  "video_encoder": "libx264",
+  "my_phone_text": "8527150060, 8527150040",
+  "my_address_text": "Pillar No. 719, Uttam Nagar West, New Delhi 110059",
+  "their_phone_numbers": [
+    "8510868500",
+    "8510001591",
+    "8510001590"
+  ],
+  "replace_any_indian_mobile": true,
+  "address_keywords": [
+    "indra park",
+    "piller 86",
+    "pillar 86",
+    "pillar no 86",
+    "pillar no. 86",
+    "f-block",
+    "plot no-1",
+    "plot no 1",
+    "110043"
+  ],
+  "address_continuation_keywords": [
+    "najafgarh",
+    "new delhi",
+    "delhi"
+  ],
+  "extra_replacements": {
+    "Najafgarh": "Uttam Nagar"
+  },
+  "data_dir": "data",
+  "stories_enabled": false,
+  "story_source_accounts": [
+    "hoodanutrition_official",
+    "fitharyanvi"
+  ],
+  "story_poll_minutes": 45,
+  "outro_on_stories": true,
+  "spare_ig_username": "PUT_SPARE_INSTAGRAM_USERNAME_HERE",
+  "spare_ig_session_file": "",
+  "proxy": "",
+  "best_enabled": true,
+  "best_lookback_days": 30,
+  "best_per_day": 2,
+  "best_hour_ist": 11,
+  "best_min_age_days": 1,
+  "best_scan_limit": 60,
+  "footer_marker": "📍 Hooda Nutrition, Uttam Nagar",
+  "caption_footer": [
+    "📞 WhatsApp: 8527150060, 8527150040",
+    "🏬 Near Nawada Metro Pillar 719"
+  ],
+  "store_hashtags": [
+    "#hoodanutrition",
+    "#uttamnagar",
+    "#uttamnagardelhi",
+    "#nawada",
+    "#dwarka",
+    "#janakpuri",
+    "#westdelhi",
+    "#supplements",
+    "#wheyprotein",
+    "#gym",
+    "#fitness",
+    "#bodybuilding",
+    "#delhigym"
+  ],
+  "cover": {
+    "enabled": true,
+    "badge": "assets/badge.png",
+    "width": 220,
+    "x": 40,
+    "y": 290
+  },
+  "watermark": {
+    "enabled": true,
+    "badge": "assets/badge.png",
+    "width": 220,
+    "x": 40,
+    "y": 150,
+    "opacity": 0.25
+  }
+}
