@@ -136,6 +136,30 @@ def rewrite_caption(text, cfg):
         out = re.sub(re.escape(a), b, out, flags=re.I)
     return out
 
+def caption_key(text):
+    """Comparable core of a caption: no hashtags, footer, numbers, emoji or punctuation."""
+    t = (text or "").split("📍 Hooda Nutrition")[0]
+    t = HASHTAG_RE.sub(" ", t)
+    t = re.sub(r"\d", " ", t)
+    t = re.sub(r"[^\w\u0900-\u097F]+", " ", t, flags=re.UNICODE)
+    return " ".join(t.lower().split())[:120]
+
+
+def image_hash(path):
+    """64-bit difference hash; similar images give similar hashes. Ignores the top-left badge area."""
+    from PIL import Image
+    im = Image.open(path).convert("L")
+    w, h = im.size
+    im = im.crop((int(w * 0.3), int(h * 0.15), w, int(h * 0.85)))   # skip the badge corner and top/bottom bars
+    im = im.resize((9, 8))
+    px = list(im.getdata())
+    bits = 0
+    for r in range(8):
+        for c in range(8):
+            bits = (bits << 1) | (px[r * 9 + c] > px[r * 9 + c + 1])
+    return bits
+
+
 HASHTAG_RE = re.compile(r"(?<![\w#])#[\w\u0900-\u097F]+", re.UNICODE)
 MAX_TAGS, MAX_CAPTION = 30, 2200          # Instagram limits - going over makes the post fail
 
@@ -220,6 +244,16 @@ class IG:
                 raise
             j = self.get(self.cfg["ig_user_id"], fields=fields.replace(",view_count", ""))
         return j.get("business_discovery", {}).get("media", {}).get("data", [])
+
+    def own_media(self, limit=100):
+        out, url, params = [], f"{self.g}/{self.cfg['ig_user_id']}/media", {
+            "fields": "id,caption,media_type,thumbnail_url,media_url,timestamp,permalink",
+            "limit": 50, "access_token": self.tok}
+        while url and len(out) < limit:
+            j = self._check(requests.get(url, params=params, timeout=60))
+            out += j.get("data", [])
+            url, params = j.get("paging", {}).get("next"), None
+        return out[:limit]
 
     def refresh_token(self):
         j = self._check(requests.get(f"{self.g}/oauth/access_token", params={
@@ -634,6 +668,9 @@ class Bot:
                                 (m["id"], fp, user, self.kind_of(m), m.get("permalink"), m.get("caption"), status, time.time()))
                 self.db.commit()
                 if status == "new":
+                    if self.already_on_store(m):
+                        self.db.execute("UPDATE items SET status='on_store' WHERE media_id=?", (m["id"],))
+                        self.db.commit(); continue
                     found += 1
                     self.prepare(m, user)
         if first_run:
@@ -697,6 +734,53 @@ class Bot:
             self.db.execute("UPDATE items SET status='failed', error=? WHERE media_id=?", (str(e), mid)); self.db.commit()
             self.tg.text(f"⚠️ Couldn't prepare a story from @{user}: {e}")
 
+    # ---- already on the store account?
+    def load_store_posts(self):
+        """Captions + thumbnail hashes of everything already on the store account (cached for 30 min)."""
+        if getattr(self, "_store_cache", None) and time.time() - self._store_cache[0] < 1800:
+            return self._store_cache[1]
+        posts = []
+        cache = json.loads(kv_get(self.db, "store_hashes", "{}"))
+        mdir = os.path.join(self.cfg["data_dir"], "media")
+        for p in self.ig.own_media(150):
+            h = cache.get(p["id"])
+            thumb = p.get("thumbnail_url") or (p.get("media_url") if p.get("media_type") == "IMAGE" else None)
+            if h is None and thumb:
+                try:
+                    tmp = download(thumb, os.path.join(mdir, f"own_{p['id']}.jpg"))
+                    h = image_hash(tmp); os.remove(tmp); cache[p["id"]] = h
+                except Exception as e:
+                    log.warning("hash failed for own post %s: %s", p["id"], e)
+            posts.append({"key": caption_key(p.get("caption")), "hash": h})
+        kv_set(self.db, "store_hashes", json.dumps(cache))
+        self._store_cache = (time.time(), posts)
+        return posts
+
+    def already_on_store(self, m):
+        """True if this source post already appears on the store account (by caption or by thumbnail)."""
+        import difflib
+        try:
+            posts = self.load_store_posts()
+        except Exception as e:
+            log.warning("could not read store posts: %s", e); return False
+        key = caption_key(rewrite_caption(m.get("caption"), self.cfg))
+        if len(key) >= 12:
+            for p in posts:
+                if p["key"] and (p["key"].startswith(key[:60]) or
+                                 difflib.SequenceMatcher(None, key, p["key"]).ratio() > 0.85):
+                    return True
+        thumb = m.get("thumbnail_url") or m.get("media_url")
+        if thumb and any(p["hash"] is not None for p in posts):
+            try:
+                tmp = download(thumb, os.path.join(self.cfg["data_dir"], "media", f"cand_{m['id']}.jpg"))
+                h = image_hash(tmp); os.remove(tmp)
+                for p in posts:
+                    if p["hash"] is not None and bin(h ^ p["hash"]).count("1") <= 8:
+                        return True
+            except Exception as e:
+                log.warning("thumbnail check failed: %s", e)
+        return False
+
     # ---- "best of recent" picks
     @staticmethod
     def score(m):
@@ -729,7 +813,24 @@ class Bot:
                     continue          # already offered, posted or rejected
                 cands.append((self.score(m), age, user, m))
         cands.sort(key=lambda c: c[0], reverse=True)
-        picks = cands[:count]
+        picks, skipped = [], 0
+        for c in cands:
+            if len(picks) >= count:
+                break
+            m = c[3]
+            if self.already_on_store(m):
+                skipped += 1
+                if not self.db.execute("SELECT 1 FROM items WHERE media_id=?", (m["id"],)).fetchone():
+                    self.db.execute("INSERT INTO items(media_id,fingerprint,source,media_type,permalink,status,created)"
+                                    " VALUES(?,?,?,?,?,?,?)", (m["id"], self.fingerprint(m), c[2], "REEL",
+                                                              m.get("permalink"), "on_store", time.time()))
+                else:
+                    self.db.execute("UPDATE items SET status='on_store' WHERE media_id=?", (m["id"],))
+                self.db.commit()
+                continue
+            picks.append(c)
+        if skipped:
+            self.tg.text(f"ℹ️ Skipped {skipped} top reel(s) that are already on your account.")
         if not picks:
             if manual:
                 self.tg.text(f"🔎 No new top reels found in the last {days} days.")
@@ -854,8 +955,9 @@ class Bot:
                 return
             if str(msg["chat"]["id"]) != self.tg.chat:
                 return
-            if txt.strip() in ("/start", "/id"):
-                self.tg.text(f"Chat id: {msg['chat']['id']}"); return
+            if txt.strip() in ("/start", "/id", "/help"):
+                self.tg.text("Commands:\n/best - top-performing reels from the last 30 days\n/best 5 - top 5\n"
+                             "/status - counts\n/check - check the main accounts now\n/retry - re-post failed items"); return
             if txt.strip() == "/status":
                 c = dict(self.db.execute("SELECT status, COUNT(*) n FROM items GROUP BY status").fetchall())
                 self.tg.text("📊 " + ", ".join(f"{k}: {v}" for k, v in c.items())); return

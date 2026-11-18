@@ -78,7 +78,7 @@ Stories are checked every 45 min (`story_poll_minutes`). Photo stories are turne
 
 ## 3c. Daily top reels
 
-Every day after 11:00 IST the bot scans the last 30 days of reels from both accounts, ranks them by views (or likes when views aren't available) plus comments, and sends you the best 2 that you haven't posted, been offered or rejected yet. Send `/best` (or `/best 5`) to the bot any time to get picks immediately.
+Every day after 11:00 IST the bot scans the last 30 days of reels from both accounts, ranks them by views (or likes when views aren't available) plus comments, and sends you the best 2 that you haven't posted, been offered or rejected yet. Send `/best` (or `/best 5`) to the bot any time to get picks immediately. Before suggesting anything the bot cross-checks your own account (captions and thumbnails), so reels already on your page — including ones you posted yourself — are never suggested again.
 
 ## 4. Settings you may want to change (`config.json`)
 
