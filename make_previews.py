@@ -22,10 +22,17 @@ if not cover:
     subprocess.run(["ffmpeg","-y","-loglevel","error","-ss","1","-i","v.mp4","-frames:v","1","cover.jpg"], check=True)
     cover = "cover.jpg"
 base = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920"
-variants = [("1_small_plain", "assets/logo_plain.png", 190),
-            ("2_medium_white_badge", "assets/badge_light.png", 220),
-            ("3_large_dark_badge", "assets/badge_dark.png", 280)]
-for name, asset, w in variants:
-    fc = f"[0:v]{base}[b];[1:v]scale={w}:-1[l];[b][l]overlay=40:150"
-    subprocess.run(["ffmpeg","-y","-loglevel","error","-i",cover,"-i",asset,"-filter_complex",fc,"-frames:v","1",f"out/{name}.jpg"], check=True)
-print("done")
+frame = None
+try:
+    get(raw["media_url"], "v.mp4")
+    subprocess.run(["ffmpeg","-y","-loglevel","error","-ss","5","-i","v.mp4","-frames:v","1","frame.jpg"], check=True)
+    frame = "frame.jpg"
+except Exception as e:
+    print("video frame failed, using cover:", e)
+    frame = cover
+jobs = [("thumbnail_option3", cover, 220, 1.0),
+        ("video_frame_watermark", frame, 220, 0.25)]
+for name, src, w, op in jobs:
+    fc = f"[0:v]{base}[b];[1:v]scale={w}:-1,format=rgba,colorchannelmixer=aa={op}[l];[b][l]overlay=40:150"
+    subprocess.run(["ffmpeg","-y","-loglevel","error","-i",src,"-i","assets/badge_dark.png","-filter_complex",fc,"-frames:v","1",f"out/{name}.jpg"], check=True)
+print("done", frame)
