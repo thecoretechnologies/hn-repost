@@ -301,7 +301,7 @@ class IG:
         errors = []
         url = public_host(path)
         if url:
-            for attempt in (1, 2):
+            for attempt in (1, 2, 3):
                 try:
                     cid = self._container(media_type, caption, carousel_item, video_url=url, **extra)["id"]
                     self._wait(cid)
@@ -309,9 +309,9 @@ class IG:
                 except Exception as e:
                     errors.append(f"hosted try {attempt}: {e}")
                     log.warning("hosted upload failed: %s", e)
-                    if "cover" in str(e).lower() or "Invalid parameter" in str(e):
-                        extra.pop("cover_url", None)      # retry without the custom cover
-                    time.sleep(10)
+                    if attempt == 2:
+                        extra.pop("cover_url", None)      # last try without the custom cover
+                    time.sleep(30)
         try:
             j = self._container(media_type, caption, carousel_item, upload_type="resumable", **extra)
             cid = j["id"]
@@ -502,7 +502,15 @@ def public_host(path):
     subprocess.run(["gh", "release", "upload", "media", tmp, "-R", repo, "--clobber"], check=True, capture_output=True)
     os.remove(tmp)
     HOSTED.append(name)
-    return f"https://github.com/{repo}/releases/download/media/{name}"
+    url = f"https://github.com/{repo}/releases/download/media/{name}"
+    for _ in range(20):                       # wait until the file is actually downloadable
+        try:
+            if requests.head(url, allow_redirects=True, timeout=30).status_code == 200:
+                break
+        except Exception:
+            pass
+        time.sleep(3)
+    return url
 
 
 HOSTED = []
