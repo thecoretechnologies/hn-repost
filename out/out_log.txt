@@ -1,0 +1,5 @@
+From https://github.com/thecoretechnologies/hn-repost
+ * branch            state      -> FETCH_HEAD
+ * [new branch]      state      -> origin/state
+cleanup 0 
+exit 0
