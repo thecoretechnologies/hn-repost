@@ -50,6 +50,7 @@ jobs:
           HN_SPARE_IG_USERNAME: ${{ secrets.HN_SPARE_IG_USERNAME }}
           HN_IG_SESSION_B64: ${{ secrets.HN_IG_SESSION_B64 }}
           HN_PROXY: ${{ secrets.HN_PROXY }}
+          GH_TOKEN: ${{ github.token }}
         run: python hn_repost.py --run-minutes 9 --best-now "${{ github.event.inputs.best_now || 0 }}"
 
       - name: Save state

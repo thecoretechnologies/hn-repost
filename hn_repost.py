@@ -249,41 +249,47 @@ class IG:
                            f"bytes {(vs.get('uploading_phase') or {}).get('bytes_transferred')}; "
                            f"processing: {(vs.get('processing_phase') or {}).get('status')})")
 
-    def _upload_video(self, path, media_type, caption=None, carousel_item=False, attempt=1):
-        params = dict(media_type=media_type, upload_type="resumable")
+    def _container(self, media_type, caption, carousel_item, **extra):
+        params = dict(media_type=media_type, **extra)
         if caption is not None:
             params["caption"] = caption
         if media_type == "REELS":
             params["share_to_feed"] = "true"
         if carousel_item:
             params["is_carousel_item"] = "true"
-        j = self.post(f"{self.cfg['ig_user_id']}/media", **params)
-        cid = j["id"]
-        uri = j.get("uri") or f"https://rupload.facebook.com/ig-api-upload/{self.v}/{cid}"
-        size = os.path.getsize(path)
-        with open(path, "rb") as f:
-            data = f.read()
-        r = requests.post(uri, headers={"Authorization": f"OAuth {self.tok}", "offset": "0",
-                                        "file_size": str(size), "Content-Type": "application/octet-stream"},
-                          data=data, timeout=900)
-        try:
-            res = r.json()
-        except Exception:
-            res = {"raw": r.text[:300]}
-        log.info("upload %s (%d bytes) -> HTTP %s %s", cid, size, r.status_code, str(res)[:300])
-        if r.status_code != 200 or not res.get("success", False):
-            if attempt < 2:
-                time.sleep(10)
-                return self._upload_video(path, media_type, caption, carousel_item, attempt + 1)
-            raise RuntimeError(f"video upload failed: HTTP {r.status_code} {str(res)[:300]}")
-        try:
-            self._wait(cid)
-        except RuntimeError as e:
-            if attempt < 2 and "timed out" in str(e):
-                log.warning("retrying upload after timeout: %s", e)
-                return self._upload_video(path, media_type, caption, carousel_item, attempt + 1)
-            raise
-        return cid
+        return self.post(f"{self.cfg['ig_user_id']}/media", **params)
+
+    def _upload_video(self, path, media_type, caption=None, carousel_item=False):
+        """1) resumable upload of the file (twice)  2) fallback: host the file publicly and let Instagram fetch it."""
+        errors = []
+        for attempt in (1, 2):
+            try:
+                j = self._container(media_type, caption, carousel_item, upload_type="resumable")
+                cid = j["id"]
+                uri = j.get("uri") or f"https://rupload.facebook.com/ig-api-upload/{self.v}/{cid}"
+                size = os.path.getsize(path)
+                with open(path, "rb") as f:
+                    r = requests.post(uri, headers={"Authorization": f"OAuth {self.tok}", "offset": "0",
+                                                    "file_size": str(size)}, data=f, timeout=900)
+                log.info("upload try %d %s (%d bytes) -> HTTP %s %s", attempt, cid, size, r.status_code, r.text[:300])
+                if r.status_code != 200 or '"success":true' not in r.text.replace(" ", ""):
+                    raise RuntimeError(f"upload HTTP {r.status_code}: {r.text[:200]}")
+                self._wait(cid)
+                return cid
+            except Exception as e:
+                errors.append(f"try {attempt}: {e}")
+                log.warning("resumable upload failed (%s)", e)
+                time.sleep(15)
+        url = public_host(path)
+        if url:
+            try:
+                log.info("falling back to hosted URL upload")
+                cid = self._container(media_type, caption, carousel_item, video_url=url)["id"]
+                self._wait(cid)
+                return cid
+            except Exception as e:
+                errors.append(f"hosted: {e}")
+        raise RuntimeError("video upload failed - " + " | ".join(errors))
 
     def _image(self, url, caption=None, carousel_item=False):
         params = dict(image_url=url)
@@ -396,6 +402,25 @@ def add_outro(src, outro, dest, encoder="libx264"):
          "-map", "[v]", "-map", "[a]", *venc, "-pix_fmt", "yuv420p", "-profile:v", "high",
          "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-movflags", "+faststart", dest], timeout=1800)
     return dest
+
+def public_host(path):
+    """Upload the file as an asset of a 'media' release in this GitHub repo and return a public URL.
+    Only works inside GitHub Actions (needs GH_TOKEN + GITHUB_REPOSITORY)."""
+    repo = os.environ.get("GITHUB_REPOSITORY")
+    if not (repo and os.environ.get("GH_TOKEN") and shutil.which("gh")):
+        return None
+    try:
+        subprocess.run(["gh", "release", "view", "media", "-R", repo], check=True, capture_output=True)
+    except subprocess.CalledProcessError:
+        subprocess.run(["gh", "release", "create", "media", "-R", repo, "-t", "media (temporary uploads)",
+                        "-n", "Temporary video files for Instagram uploads"], check=True, capture_output=True)
+    name = f"{int(time.time())}_{os.path.basename(path)}"
+    tmp = os.path.join(os.path.dirname(path), name)
+    shutil.copy(path, tmp)
+    subprocess.run(["gh", "release", "upload", "media", tmp, "-R", repo, "--clobber"], check=True, capture_output=True)
+    os.remove(tmp)
+    return f"https://github.com/{repo}/releases/download/media/{name}"
+
 
 def image_to_story_video(img, dest, seconds=6):
     """Turn a photo story into a short 1080x1920 video so it can be uploaded directly (no public URL needed)."""
