@@ -222,7 +222,10 @@ class IG:
         except Exception:
             r.raise_for_status(); raise
         if "error" in j:
-            raise RuntimeError(f"Graph API: {j['error'].get('message')} (code {j['error'].get('code')})")
+            e = j["error"]
+            detail = " - ".join(x for x in (e.get("error_user_title"), e.get("error_user_msg")) if x)
+            raise RuntimeError(f"Graph API: {e.get('message')} (code {e.get('code')}/{e.get('error_subcode')})"
+                               + (f": {detail}" if detail else ""))
         return j
 
     def get(self, path, **params):
@@ -287,43 +290,43 @@ class IG:
         params = dict(media_type=media_type, **{k: v for k, v in extra.items() if v})
         if caption is not None:
             params["caption"] = caption
-        if media_type == "REELS":
-            params["share_to_feed"] = "true"
         if carousel_item:
             params["is_carousel_item"] = "true"
         return self.post(f"{self.cfg['ig_user_id']}/media", **params)
 
     def _upload_video(self, path, media_type, caption=None, carousel_item=False, extra=None):
-        extra = extra or {}
-        """1) resumable upload of the file (twice)  2) fallback: host the file publicly and let Instagram fetch it."""
+        """1) host the file publicly and let Instagram fetch it (reliable for any length)
+           2) fallback: direct (resumable) upload - Instagram rejects this for longer videos"""
+        extra = dict(extra or {})
         errors = []
-        for attempt in (1, 2):
-            try:
-                j = self._container(media_type, caption, carousel_item, upload_type="resumable", **extra)
-                cid = j["id"]
-                uri = j.get("uri") or f"https://rupload.facebook.com/ig-api-upload/{self.v}/{cid}"
-                size = os.path.getsize(path)
-                with open(path, "rb") as f:
-                    r = requests.post(uri, headers={"Authorization": f"OAuth {self.tok}", "offset": "0",
-                                                    "file_size": str(size)}, data=f, timeout=900)
-                log.info("upload try %d %s (%d bytes) -> HTTP %s %s", attempt, cid, size, r.status_code, r.text[:300])
-                if r.status_code != 200 or '"success":true' not in r.text.replace(" ", ""):
-                    raise RuntimeError(f"upload HTTP {r.status_code}: {r.text[:200]}")
-                self._wait(cid)
-                return cid
-            except Exception as e:
-                errors.append(f"try {attempt}: {e}")
-                log.warning("resumable upload failed (%s)", e)
-                time.sleep(15)
         url = public_host(path)
         if url:
-            try:
-                log.info("falling back to hosted URL upload")
-                cid = self._container(media_type, caption, carousel_item, video_url=url, **extra)["id"]
-                self._wait(cid)
-                return cid
-            except Exception as e:
-                errors.append(f"hosted: {e}")
+            for attempt in (1, 2):
+                try:
+                    cid = self._container(media_type, caption, carousel_item, video_url=url, **extra)["id"]
+                    self._wait(cid)
+                    return cid
+                except Exception as e:
+                    errors.append(f"hosted try {attempt}: {e}")
+                    log.warning("hosted upload failed: %s", e)
+                    if "cover" in str(e).lower() or "Invalid parameter" in str(e):
+                        extra.pop("cover_url", None)      # retry without the custom cover
+                    time.sleep(10)
+        try:
+            j = self._container(media_type, caption, carousel_item, upload_type="resumable", **extra)
+            cid = j["id"]
+            uri = j.get("uri") or f"https://rupload.facebook.com/ig-api-upload/{self.v}/{cid}"
+            size = os.path.getsize(path)
+            with open(path, "rb") as f:
+                r = requests.post(uri, headers={"Authorization": f"OAuth {self.tok}", "offset": "0",
+                                                "file_size": str(size)}, data=f, timeout=900)
+            log.info("direct upload %s (%d bytes) -> HTTP %s %s", cid, size, r.status_code, r.text[:300])
+            if r.status_code != 200:
+                raise RuntimeError(f"direct upload HTTP {r.status_code}: {r.text[:200]}")
+            self._wait(cid)
+            return cid
+        except Exception as e:
+            errors.append(f"direct: {e}")
         raise RuntimeError("video upload failed - " + " | ".join(errors))
 
     def _image(self, url, caption=None, carousel_item=False):
@@ -364,7 +367,10 @@ class IG:
             self._wait(cid, 300)
         else:
             raise RuntimeError(f"unknown kind {kind}")
-        return self.publish(cid)
+        try:
+            return self.publish(cid)
+        finally:
+            cleanup_hosted()
 
 # ----------------------------------------------------------------- media
 def run(cmd, **kw):
@@ -495,7 +501,19 @@ def public_host(path):
     shutil.copy(path, tmp)
     subprocess.run(["gh", "release", "upload", "media", tmp, "-R", repo, "--clobber"], check=True, capture_output=True)
     os.remove(tmp)
+    HOSTED.append(name)
     return f"https://github.com/{repo}/releases/download/media/{name}"
+
+
+HOSTED = []
+
+
+def cleanup_hosted():
+    """Delete the temporary files from the GitHub release once Instagram has them."""
+    repo = os.environ.get("GITHUB_REPOSITORY")
+    while HOSTED and repo:
+        name = HOSTED.pop()
+        subprocess.run(["gh", "release", "delete-asset", "media", name, "-R", repo, "-y"], capture_output=True)
 
 
 def image_to_story_video(img, dest, seconds=6):
@@ -1035,6 +1053,19 @@ class Bot:
     def loop(self, once=False, run_minutes=0):
         log.info("bot started; watching %s", ", ".join(self.cfg["source_accounts"]))
         self.tg.offset = int(kv_get(self.db, "tg_offset", 0))
+        # one-off retries requested through config ("retry_codes": ["DfUm2Gty6AG", ...])
+        done = set(json.loads(kv_get(self.db, "retry_done", "[]")))
+        for code in self.cfg.get("retry_codes", []):
+            if code in done:
+                continue
+            n = self.db.execute("UPDATE items SET status='approved', approved_at=?, error=NULL "
+                                "WHERE permalink LIKE ? AND status IN ('failed','pending')",
+                                (time.time(), f"%{code}%")).rowcount
+            self.db.commit(); done.add(code)
+            if n:
+                kv_set(self.db, "last_post", 0)
+                self.tg.text(f"🔁 Retrying https://www.instagram.com/reel/{code}/ now.")
+        kv_set(self.db, "retry_done", json.dumps(sorted(done)))
         stop_at = START_TIME + run_minutes * 60 if run_minutes else None
         setup_mode = self.tg.chat.startswith("PUT_")
         if setup_mode:
