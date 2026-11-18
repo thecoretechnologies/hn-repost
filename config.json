@@ -101,5 +101,6 @@
     "Df3xNRVt-Q7#postnow"
   ],
   "resend_pending_token": "2026-11-18a",
-  "official_story_accounts": {}
+  "official_story_accounts": {},
+  "paused": true
 }

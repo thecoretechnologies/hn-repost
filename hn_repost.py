@@ -1233,6 +1233,10 @@ class Bot:
                 n = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
                 self.tg.text("🔎 Looking for top-performing reels...")
                 self.pick_best(count=n, manual=True); return
+            if txt.strip() == "/pause":
+                kv_set(self.db, "paused", "1"); self.tg.text("⏸ Bot paused - no checking or posting until /resume."); return
+            if txt.strip() == "/resume":
+                kv_set(self.db, "paused", "0"); self.tg.text("▶️ Bot resumed."); return
             if txt.strip() in ("/queue", "/q"):
                 self.show_queue(); return
             if txt.strip() == "/accounts":
@@ -1300,6 +1304,10 @@ class Bot:
             log.exception("publish failed")
             self.db.execute("UPDATE items SET status='failed', error=? WHERE media_id=?", (str(e), row["media_id"]))
             kv_set(self.db, "last_post", time.time() - gap + 300)   # retry others after 5 min
+            if "API access blocked" in str(e):
+                kv_set(self.db, "paused", "1")
+                self.tg.text("⛔ Meta has blocked the bot's API access, so I've paused the bot to avoid making it worse. "
+                             "Nothing will be checked or posted until you send /resume.")
             self.tg.text(f"⚠️ Posting failed for {row['permalink']}\n{e}\n\nSend /retry to try again.")
         self.db.commit()
 
@@ -1341,11 +1349,23 @@ class Bot:
         if setup_mode:
             log.warning("telegram_chat_id not set - send /id to your bot in Telegram to get it")
         while True:
-            if not setup_mode and time.time() - float(kv_get(self.db, "last_poll", 0)) > self.cfg["poll_minutes"] * 60:
+            if (not setup_mode and not (self.cfg.get("paused") or kv_get(self.db, "paused") == "1")
+                    and time.time() - float(kv_get(self.db, "last_poll", 0)) > self.cfg["poll_minutes"] * 60):
                 kv_set(self.db, "last_poll", time.time())
                 self.maybe_refresh()
                 self.check_sources()
                 self.maybe_pick_best()
+            paused = self.cfg.get("paused") or kv_get(self.db, "paused") == "1"
+            if paused:
+                for u in self.tg.updates(wait=1 if once else 20):
+                    try:
+                        self.handle(u)
+                    except Exception:
+                        log.exception("update handling failed")
+                kv_set(self.db, "tg_offset", self.tg.offset)
+                if once or (stop_at and time.time() > stop_at):
+                    break
+                continue
             if (not setup_mode and self.stories and
                     time.time() - float(kv_get(self.db, "last_story_poll", 0)) > self.cfg.get("story_poll_minutes", 45) * 60):
                 kv_set(self.db, "last_story_poll", time.time())
