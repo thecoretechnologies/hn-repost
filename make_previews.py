@@ -5,6 +5,13 @@ raw = json.loads(db.execute("SELECT raw FROM items WHERE media_id=?", (mid,)).fe
 os.makedirs("out", exist_ok=True)
 def get(url, dest):
     r = requests.get(url, timeout=60); r.raise_for_status(); open(dest, "wb").write(r.content); return dest
+tok = os.environ.get("HN_ACCESS_TOKEN")
+try:
+    j = requests.get(f"https://graph.facebook.com/v27.0/{mid}", params={"fields":"thumbnail_url,media_url","access_token":tok}, timeout=30).json()
+    print("fresh", list(j))
+    raw.update({k:v for k,v in j.items() if k in ("thumbnail_url","media_url")})
+except Exception as e:
+    print("refresh failed", e)
 cover = None
 for key in ("thumbnail_url",):
     if raw.get(key):
