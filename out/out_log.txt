@@ -1,0 +1,44 @@
+From https://github.com/thecoretechnologies/hn-repost
+ * branch            state      -> FETCH_HEAD
+ * [new branch]      state      -> origin/state
+fresh media_url ok: False
+stream|codec_name=h264|profile=High|width=720|height=1280|pix_fmt=yuv420p|r_frame_rate=30/1|
+stream|codec_name=aac|profile=HE-AAC|sample_rate=44100|channels=2|r_frame_rate=0/0
+format|duration=75.229796|size=9969964|bit_rate=1060214
+
+stream|codec_name=h264|profile=High|width=1080|height=1920|pix_fmt=yuv420p|r_frame_rate=30/1|
+stream|codec_name=aac|profile=LC|sample_rate=48000|channels=2|r_frame_rate=0/0
+format|duration=78.141000|size=23674680|bit_rate=2423790
+
+stream|codec_name=h264|profile=High|width=1080|height=1920|pix_fmt=yuv420p|r_frame_rate=30/1|
+stream|codec_name=aac|profile=LC|sample_rate=48000|channels=2|r_frame_rate=0/0
+format|duration=36.066667|size=11377139|bit_rate=2523579
+
+== t36 bytes
+  bytes: 200 {"success":true,"message":"Upload Successful."}
+  status: {"id": "18026690879706659", "status": "Finished: Media has been uploaded and it is ready to be published.", "status_code": "FINISHED", "video_status": {"uploading_phase": {"status": "complete", "bytes_transferred": 11377139}, "processing_phase": {"status": "complete"}}}
+stream|codec_name=h264|profile=High|width=1080|height=1920|pix_fmt=yuv420p|r_frame_rate=30/1|
+stream|codec_name=aac|profile=LC|sample_rate=48000|channels=2|r_frame_rate=0/0
+format|duration=42.066667|size=13134982|bit_rate=2497936
+
+== t42 bytes
+  bytes: 200 {"success":true,"message":"Upload Successful."}
+  status: {"id": "18026691023706659", "status": "Finished: Media has been uploaded and it is ready to be published.", "status_code": "FINISHED", "video_status": {"uploading_phase": {"status": "complete", "bytes_transferred": 13134982}, "processing_phase": {"status": "complete"}}}
+stream|codec_name=h264|profile=High|width=1080|height=1920|pix_fmt=yuv420p|r_frame_rate=30/1|
+stream|codec_name=aac|profile=LC|sample_rate=48000|channels=2|r_frame_rate=0/0
+format|duration=48.066667|size=15236943|bit_rate=2535968
+
+== t48 bytes
+  bytes: 200 {"success":true,"message":"Upload Successful."}
+  status: {"id": "18026691176706659", "status": "Finished: Media has been uploaded and it is ready to be published.", "status_code": "FINISHED", "video_status": {"uploading_phase": {"status": "complete", "bytes_transferred": 15236943}, "processing_phase": {"status": "complete"}}}
+stream|codec_name=h264|profile=High|width=1080|height=1920|pix_fmt=yuv420p|r_frame_rate=30/1|
+stream|codec_name=aac|profile=LC|sample_rate=48000|channels=2|r_frame_rate=0/0
+format|duration=54.066667|size=17013191|bit_rate=2517364
+
+== t54 bytes
+  bytes: 400 {"debug_info":{"retriable":false,"type":"ProcessingFailedError","message":"Request processing failed"}}
+  status: {"id": "18026691275706659", "status": "Finished: Media has been uploaded and it is ready to be published.", "status_code": "FINISHED", "video_status": {"uploading_phase": {"status": "error", "bytes_transferred": 0, "source_file_size": 0, "errors": [{"code": 1363008, "message": "OIL Error[FILE_NOT_FOUND: 6]: File not found.Caused by exception: facebook_crude_OILException"}]}, "processing_phase": {"status": "error"}}}
+== hosted full video https://github.com/thecoretechnologies/hn-repost/releases/download/debug/real.mp4
+  container: 200 {"id":"18026691419706659"}
+  status: {"id": "18026691419706659", "status": "Finished: Media has been uploaded and it is ready to be published.", "status_code": "FINISHED", "video_status": {"uploading_phase": {"status": "not_started"}, "processing_phase": {"status": "not_started"}}}
+exit 0
