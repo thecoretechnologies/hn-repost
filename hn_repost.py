@@ -34,6 +34,12 @@ def load_config(path):
                      ("proxy", "HN_PROXY")):
         if os.environ.get(env):
             cfg[key] = os.environ[env]
+    if os.environ.get("HN_IG_COOKIES_B64"):
+        import base64
+        p = os.path.join(cfg["data_dir"], "ig_cookies.txt")
+        with open(p, "wb") as f:
+            f.write(base64.b64decode(os.environ["HN_IG_COOKIES_B64"]))
+        cfg["ig_cookies_file"] = p
     if os.environ.get("HN_IG_SESSION_B64"):
         import base64
         p = os.path.join(cfg["data_dir"], "ig_session")
@@ -596,6 +602,49 @@ class StoryWatcher:
                             "permalink": f"https://www.instagram.com/stories/{username}/{it.mediaid}/"})
         return out
 
+class YtdlpStoryWatcher:
+    """Reads stories with yt-dlp using the spare account's browser cookies (cookies.txt)."""
+    def __init__(self, cfg):
+        self.cookies = cfg["ig_cookies_file"]
+        self.ytdlp = shutil.which("yt-dlp") or "yt-dlp"
+
+    def _json(self, url):
+        cmd = [self.ytdlp, "-J", "--no-warnings", "--cookies", self.cookies, url]
+        if PROXY:
+            cmd[1:1] = ["--proxy", PROXY]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+        if r.returncode != 0:
+            raise RuntimeError(r.stderr.strip()[-300:] or "yt-dlp failed")
+        return json.loads(r.stdout)
+
+    def stories(self, username):
+        j = self._json(f"https://www.instagram.com/stories/{username}/")
+        out = []
+        for e in j.get("entries") or [j]:
+            vids = [f for f in (e.get("formats") or []) if f.get("vcodec") not in (None, "none") and f.get("url")]
+            if vids:
+                best = max(vids, key=lambda f: (f.get("height") or 0, f.get("tbr") or 0))
+                url, is_video = best["url"], True
+            else:
+                thumbs = [t for t in (e.get("thumbnails") or []) if t.get("url")]
+                if not thumbs:
+                    continue
+                best = max(thumbs, key=lambda t: (t.get("width") or 0))
+                url, is_video = best["url"], False
+            ts = e.get("timestamp")
+            out.append({"id": f"story_{e.get('id')}", "is_video": is_video, "url": url,
+                        "timestamp": datetime.fromtimestamp(ts, timezone.utc).isoformat() if ts else "",
+                        "permalink": f"https://www.instagram.com/stories/{username}/{e.get('id')}/"})
+        return out
+
+    def reel_url(self, permalink):
+        j = self._json(permalink)
+        vids = [f for f in (j.get("formats") or []) if f.get("vcodec") not in (None, "none") and f.get("url")]
+        if not vids:
+            raise RuntimeError("no video found")
+        return max(vids, key=lambda f: (f.get("height") or 0, f.get("tbr") or 0))["url"]
+
+
 # ----------------------------------------------------------------- telegram
 class TG:
     def __init__(self, cfg):
@@ -679,9 +728,17 @@ class Bot:
         global PROXY, STORY_WATCHER
         PROXY = self.cfg.get("proxy") or None
         self.stories = None
-        if os.environ.get("HN_IG_SESSION_B64") and os.environ.get("HN_SPARE_IG_USERNAME"):
+        if self.cfg.get("ig_cookies_file"):
             self.cfg["stories_enabled"] = True
-        if self.cfg.get("stories_enabled") or self.cfg.get("spare_ig_username", "").find("PUT_") != 0:
+            try:
+                STORY_WATCHER = YtdlpStoryWatcher(self.cfg)
+                self.stories = STORY_WATCHER
+            except Exception as e:
+                log.error("cookie story watcher failed: %s", e)
+        elif os.environ.get("HN_IG_SESSION_B64") and os.environ.get("HN_SPARE_IG_USERNAME"):
+            self.cfg["stories_enabled"] = True
+        if self.stories is None and (self.cfg.get("stories_enabled") and not self.cfg.get("ig_cookies_file")
+                                      and self.cfg.get("spare_ig_username", "").find("PUT_") != 0):
             try:
                 STORY_WATCHER = StoryWatcher(self.cfg)
                 self.stories = STORY_WATCHER if self.cfg.get("stories_enabled") else None
@@ -742,6 +799,10 @@ class Bot:
                 items = self.stories.stories(user)
             except Exception as e:
                 log.error("could not read stories of @%s: %s", user, e)
+                today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                if kv_get(self.db, "story_alert") != today:
+                    kv_set(self.db, "story_alert", today)
+                    self.tg.text(f"⚠️ Couldn't read stories (the spare account may be logged out):\n{str(e)[:300]}")
                 continue
             for it in items:
                 if self.db.execute("SELECT 1 FROM items WHERE media_id=?", (it["id"],)).fetchone():
