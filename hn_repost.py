@@ -597,10 +597,11 @@ class TG:
 
     @staticmethod
     def kb(mid):
-        return json.dumps({"inline_keyboard": [[
-            {"text": "✅ Approve", "callback_data": f"ok:{mid}"},
-            {"text": "✏️ Edit caption", "callback_data": f"ed:{mid}"},
-            {"text": "❌ Reject", "callback_data": f"no:{mid}"}]]})
+        return json.dumps({"inline_keyboard": [
+            [{"text": "⚡ Post now", "callback_data": f"now:{mid}"},
+             {"text": "✅ Approve (queue)", "callback_data": f"ok:{mid}"}],
+            [{"text": "✏️ Edit caption", "callback_data": f"ed:{mid}"},
+             {"text": "❌ Reject", "callback_data": f"no:{mid}"}]]})
 
     def send_review(self, row, files):
         cap = row["caption"] or ("(stories have no caption)" if row["media_type"] == "STORY" else "(no caption)")
@@ -987,7 +988,12 @@ class Bot:
             act, mid = q["data"].split(":", 1)
             row = self.row(mid)
             note = ""
-            if not row or row["status"] != "pending":
+            if act == "now" and row and row["status"] in ("pending", "approved", "failed"):
+                # jump the queue: front of the line and no waiting gap
+                self.db.execute("UPDATE items SET status='approved', approved_at=0, error=NULL WHERE media_id=?", (mid,))
+                kv_set(self.db, "last_post", 0)
+                note = "Posting now - you'll get the link in a few minutes"
+            elif not row or row["status"] != "pending":
                 note = "Already handled"
             elif act == "ok":
                 self.db.execute("UPDATE items SET status='approved', approved_at=? WHERE media_id=?", (time.time(), mid))
@@ -1002,7 +1008,7 @@ class Bot:
             self.db.commit()
             try:
                 self.tg.call("answerCallbackQuery", callback_query_id=q["id"], text=note)
-                if act in ("ok", "no") and note != "Already handled":
+                if act in ("ok", "no", "now") and note != "Already handled":
                     self.tg.call("editMessageReplyMarkup", chat_id=self.tg.chat, message_id=q["message"]["message_id"],
                                  reply_markup=json.dumps({"inline_keyboard": [[{"text": note, "callback_data": "noop:0"}]]}))
             except Exception:
