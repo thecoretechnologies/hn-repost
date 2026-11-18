@@ -49,7 +49,7 @@
     "hoodanutrition_official",
     "fitharyanvi"
   ],
-  "story_poll_minutes": 45,
+  "story_poll_minutes": 30,
   "outro_on_stories": true,
   "spare_ig_username": "PUT_SPARE_INSTAGRAM_USERNAME_HERE",
   "spare_ig_session_file": "",
@@ -100,5 +100,6 @@
     "Df3xNRVt-Q7#2",
     "Df3xNRVt-Q7#postnow"
   ],
-  "resend_pending_token": "2026-11-18a"
+  "resend_pending_token": "2026-11-18a",
+  "official_story_accounts": {}
 }

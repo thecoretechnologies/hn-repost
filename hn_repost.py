@@ -645,6 +645,25 @@ class YtdlpStoryWatcher:
         return max(vids, key=lambda f: (f.get("height") or 0, f.get("tbr") or 0))["url"]
 
 
+class OfficialStoryWatcher:
+    """Reads stories through the official Graph API for Instagram accounts that head office has shared
+    with our business (partner access). config: "official_story_accounts": {"username": "<ig user id>"}"""
+    def __init__(self, ig, accounts):
+        self.ig, self.accounts = ig, accounts
+
+    def stories(self, username):
+        ig_id = self.accounts[username]
+        j = self.ig.get(f"{ig_id}/stories", fields="id,media_type,media_url,thumbnail_url,timestamp,permalink")
+        out = []
+        for m in j.get("data", []):
+            if not m.get("media_url"):
+                continue
+            out.append({"id": f"story_{m['id']}", "is_video": m.get("media_type") == "VIDEO",
+                        "url": m["media_url"], "timestamp": m.get("timestamp", ""),
+                        "permalink": m.get("permalink") or f"https://www.instagram.com/stories/{username}/"})
+        return out
+
+
 # ----------------------------------------------------------------- telegram
 class TG:
     def __init__(self, cfg):
@@ -728,7 +747,11 @@ class Bot:
         global PROXY, STORY_WATCHER
         PROXY = self.cfg.get("proxy") or None
         self.stories = None
-        if self.cfg.get("ig_cookies_file"):
+        if self.cfg.get("official_story_accounts"):
+            self.stories = OfficialStoryWatcher(self.ig, self.cfg["official_story_accounts"])
+            self.cfg["story_source_accounts"] = list(self.cfg["official_story_accounts"])
+            self.cfg["stories_enabled"] = True
+        elif self.cfg.get("ig_cookies_file"):
             self.cfg["stories_enabled"] = True
             try:
                 from ig_web import IGWeb
@@ -1188,6 +1211,15 @@ class Bot:
                 n = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
                 self.tg.text("🔎 Looking for top-performing reels...")
                 self.pick_best(count=n, manual=True); return
+            if txt.strip() == "/accounts":
+                try:
+                    j = self.ig.get("me/accounts", fields="name,instagram_business_account{id,username}")
+                    lines = [f"• {p['instagram_business_account']['username']} = {p['instagram_business_account']['id']}"
+                             for p in j.get("data", []) if p.get("instagram_business_account")]
+                    self.tg.text("Instagram accounts the bot can access:\n" + ("\n".join(lines) or "(none)"))
+                except Exception as e:
+                    self.tg.text(f"⚠️ {e}")
+                return
             if txt.strip() == "/pending":
                 self.resend_pending(); return
             if txt.strip() == "/retry":
