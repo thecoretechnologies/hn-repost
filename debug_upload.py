@@ -45,10 +45,13 @@ def up(path, how):
         while off < size:
             r = requests.post(uri, headers={"Authorization": f"OAuth {TOK}", "offset": str(off), "file_size": str(size)}, data=data[off:off+step], timeout=600)
             print("  chunk", off, r.status_code, r.text[:150]); off += step
-            if r.status_code != 200: break
+            if r.status_code not in (200, 206): break
     print("  status:", status(cid))
-subprocess.run(["ffmpeg","-y","-loglevel","error","-i","real.mp4","-c:v","libx264","-preset","veryfast","-b:v","900k","-maxrate","1M","-bufsize","2M","-c:a","aac","-b:a","96k","-movflags","+faststart","small.mp4"],check=True)
-probe("small.mp4")
-print("== REAL bytes"); up("real.mp4","bytes")
-print("== REAL chunks"); up("real.mp4","chunks")
-print("== SMALL bytes"); up("small.mp4","bytes")
+def mk(name, args):
+    subprocess.run(["ffmpeg","-y","-loglevel","error"]+args+["-movflags","+faststart",name],check=True); probe(name)
+mk("t30.mp4", ["-i","real.mp4","-t","30","-c","copy"])
+mk("t58.mp4", ["-i","real.mp4","-t","58","-c","copy"])
+mk("silent.mp4", ["-i","real.mp4","-f","lavfi","-i","anullsrc=r=48000:cl=stereo","-map","0:v","-map","1:a","-shortest","-c:v","copy","-c:a","aac"])
+for n in ("t30.mp4","t58.mp4","silent.mp4"):
+    print("== " + n + " bytes"); up(n, "bytes")
+print("== REAL chunks (continue on 206)"); up("real.mp4","chunks")
