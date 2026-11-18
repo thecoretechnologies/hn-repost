@@ -222,7 +222,10 @@ class IG:
         except Exception:
             r.raise_for_status(); raise
         if "error" in j:
-            raise RuntimeError(f"Graph API: {j['error'].get('message')} (code {j['error'].get('code')})")
+            e = j["error"]
+            detail = " - ".join(x for x in (e.get("error_user_title"), e.get("error_user_msg")) if x)
+            raise RuntimeError(f"Graph API: {e.get('message')} (code {e.get('code')}/{e.get('error_subcode')})"
+                               + (f": {detail}" if detail else ""))
         return j
 
     def get(self, path, **params):
