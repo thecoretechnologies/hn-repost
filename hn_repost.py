@@ -731,7 +731,8 @@ class Bot:
         if self.cfg.get("ig_cookies_file"):
             self.cfg["stories_enabled"] = True
             try:
-                STORY_WATCHER = YtdlpStoryWatcher(self.cfg)
+                from ig_web import IGWeb
+                STORY_WATCHER = IGWeb(self.cfg["ig_cookies_file"], self.cfg.get("proxy") or None)
                 self.stories = STORY_WATCHER
             except Exception as e:
                 log.error("cookie story watcher failed: %s", e)
