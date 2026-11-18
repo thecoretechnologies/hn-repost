@@ -1050,6 +1050,19 @@ class Bot:
     def loop(self, once=False, run_minutes=0):
         log.info("bot started; watching %s", ", ".join(self.cfg["source_accounts"]))
         self.tg.offset = int(kv_get(self.db, "tg_offset", 0))
+        # one-off retries requested through config ("retry_codes": ["DfUm2Gty6AG", ...])
+        done = set(json.loads(kv_get(self.db, "retry_done", "[]")))
+        for code in self.cfg.get("retry_codes", []):
+            if code in done:
+                continue
+            n = self.db.execute("UPDATE items SET status='approved', approved_at=?, error=NULL "
+                                "WHERE permalink LIKE ? AND status IN ('failed','pending')",
+                                (time.time(), f"%{code}%")).rowcount
+            self.db.commit(); done.add(code)
+            if n:
+                kv_set(self.db, "last_post", 0)
+                self.tg.text(f"🔁 Retrying https://www.instagram.com/reel/{code}/ now.")
+        kv_set(self.db, "retry_done", json.dumps(sorted(done)))
         stop_at = START_TIME + run_minutes * 60 if run_minutes else None
         setup_mode = self.tg.chat.startswith("PUT_")
         if setup_mode:
