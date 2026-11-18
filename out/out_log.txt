@@ -1,9 +1,0 @@
-From https://github.com/thecoretechnologies/hn-repost
- * branch            state      -> FETCH_HEAD
- * [new branch]      state      -> origin/state
-Traceback (most recent call last):
-  File "/home/runner/work/hn-repost/hn-repost/make_previews.py", line 4, in <module>
-    raw = json.loads(db.execute("SELECT raw FROM items WHERE media_id=?", (mid,)).fetchone()[0])
-                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^
-TypeError: 'NoneType' object is not subscriptable
-exit 1
