@@ -49,14 +49,11 @@ def up(path, how):
     print("  status:", status(cid))
 def mk(name, args):
     subprocess.run(["ffmpeg","-y","-loglevel","error"]+args+["-movflags","+faststart",name],check=True); probe(name)
-for t in (36, 42, 48, 54):
-    mk(f"t{t}.mp4", ["-i","real.mp4","-t",str(t),"-c","copy"])
-    print(f"== t{t} bytes"); up(f"t{t}.mp4","bytes")
-# hosted URL route for the full video
-subprocess.run(["gh","release","create","debug","-R",os.environ["GITHUB_REPOSITORY"],"-t","debug","-n","debug"],capture_output=True)
-subprocess.run(["gh","release","upload","debug","real.mp4","-R",os.environ["GITHUB_REPOSITORY"],"--clobber"],check=True,capture_output=True)
-url=f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/releases/download/debug/real.mp4"
-print("== hosted full video", url)
-code,t=P(f"{G}/{IG}/media", media_type="REELS", video_url=url, caption="debug"); print("  container:",code,t)
+subprocess.run(["ffmpeg","-y","-loglevel","error","-ss","1","-i","raw.mp4","-frames:v","1","-q:v","2","cover.jpg"],check=True)
+for f in ("real.mp4","cover.jpg"):
+    subprocess.run(["gh","release","upload","debug",f,"-R",os.environ["GITHUB_REPOSITORY"],"--clobber"],check=True,capture_output=True)
+base=f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/releases/download/debug/"
+print("== hosted video + cover_url")
+code,t=P(f"{G}/{IG}/media", media_type="REELS", video_url=base+"real.mp4", cover_url=base+"cover.jpg", caption="debug"); print("  container:",code,t)
 cid=json.loads(t).get("id")
 if cid: print("  status:", status(cid))
