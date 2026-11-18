@@ -33,6 +33,22 @@ src = h.download(fresh.get("media_url") or raw["media_url"], "raw.mp4")
 probe("raw.mp4")
 real = h.add_outro("raw.mp4", "assets/outro.mp4", "real.mp4", "libx264", dict(path="assets/badge.png", width=220, x=40, y=150, opacity=0.25))
 probe("real.mp4")
-for name, path in (("SYNTH", "synth.mp4"), ("REAL", "real.mp4")):
-    for mode in ("built_v27", "returned"):
-        print(f"== {name} resumable {mode}"); resumable(path, mode)
+def up(path, how):
+    code, t = P(f"{G}/{IG}/media", media_type="REELS", upload_type="resumable", caption="debug")
+    cid = json.loads(t)["id"]; uri = f"https://rupload.facebook.com/ig-api-upload/v27.0/{cid}"; size = os.path.getsize(path)
+    data = open(path, "rb").read()
+    if how == "bytes":
+        r = requests.post(uri, headers={"Authorization": f"OAuth {TOK}", "offset": "0", "file_size": str(size)}, data=data, timeout=600)
+        print("  bytes:", r.status_code, r.text[:200])
+    elif how == "chunks":
+        step = 4 * 1024 * 1024; off = 0
+        while off < size:
+            r = requests.post(uri, headers={"Authorization": f"OAuth {TOK}", "offset": str(off), "file_size": str(size)}, data=data[off:off+step], timeout=600)
+            print("  chunk", off, r.status_code, r.text[:150]); off += step
+            if r.status_code != 200: break
+    print("  status:", status(cid))
+subprocess.run(["ffmpeg","-y","-loglevel","error","-i","real.mp4","-c:v","libx264","-preset","veryfast","-b:v","900k","-maxrate","1M","-bufsize","2M","-c:a","aac","-b:a","96k","-movflags","+faststart","small.mp4"],check=True)
+probe("small.mp4")
+print("== REAL bytes"); up("real.mp4","bytes")
+print("== REAL chunks"); up("real.mp4","chunks")
+print("== SMALL bytes"); up("small.mp4","bytes")
