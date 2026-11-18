@@ -248,6 +248,24 @@ class IG:
             j = self.get(self.cfg["ig_user_id"], fields=fields.replace(",view_count", ""))
         return j.get("business_discovery", {}).get("media", {}).get("data", [])
 
+    def find_by_code(self, username, code, max_items=300):
+        """Look through an account's posts (business/creator accounts) for the post with this shortcode."""
+        after, seen = None, 0
+        base = ("id,caption,media_type,media_product_type,media_url,thumbnail_url,permalink,timestamp,"
+                "like_count,comments_count,children{media_type,media_url}")
+        while seen < max_items:
+            page = f"media.limit(50){'.after(' + after + ')' if after else ''}{{{base}}}"
+            j = self.get(self.cfg["ig_user_id"], fields=f"business_discovery.username({username}){{{page}}}")
+            media = j.get("business_discovery", {}).get("media", {})
+            for m in media.get("data", []):
+                if f"/{code}" in (m.get("permalink") or ""):
+                    return m
+            seen += len(media.get("data", []))
+            after = media.get("paging", {}).get("cursors", {}).get("after")
+            if not after or not media.get("data"):
+                return None
+        return None
+
     def own_media(self, limit=100):
         out, url, params = [], f"{self.g}/{self.cfg['ig_user_id']}/media", {
             "fields": "id,caption,media_type,thumbnail_url,media_url,timestamp,permalink",
@@ -798,6 +816,64 @@ class Bot:
                 log.exception("resend failed")
                 self.tg.text(f"⚠️ Couldn't re-send {row['permalink']}: {e}")
 
+    LINK_RE = re.compile(r"instagram\.com/(?:[\w.]+/)?(reel|reels|p|tv)/([\w-]+)")
+
+    def handle_link(self, text):
+        mm = self.LINK_RE.search(text)
+        code = mm.group(2)
+        user = None
+        um = re.search(r"@([\w.]+)", text.replace(mm.group(0), ""))
+        if um:
+            user = um.group(1)
+        self.tg.text(f"🔎 Fetching {code}...")
+        m, src = None, None
+        for u in ([user] if user else []) + [a for a in self.cfg["source_accounts"] if a != user]:
+            try:
+                m = self.ig.find_by_code(u, code, 300 if u == user else 150)
+            except Exception as e:
+                log.warning("lookup in @%s failed: %s", u, e); m = None
+                if u == user:
+                    self.tg.text(f"⚠️ Couldn't read @{u}: {e}\n(Only business/creator accounts can be read this way.)")
+            if m:
+                src = u; break
+        if not m:
+            m, src = self.link_via_ytdlp(code)
+        if not m:
+            self.tg.text("❌ Couldn't find that post. If it's from another account, send the link with the "
+                         "username, e.g.\nhttps://www.instagram.com/reel/" + code + "/ @username")
+            return
+        row = self.db.execute("SELECT status FROM items WHERE media_id=?", (m["id"],)).fetchone()
+        if row and row["status"] == "posted":
+            self.tg.text("ℹ️ This one is already posted on your page."); return
+        if not row:
+            self.db.execute("INSERT INTO items(media_id,fingerprint,source,media_type,permalink,original_caption,"
+                            "status,created) VALUES(?,?,?,?,?,?,?,?)",
+                            (m["id"], self.fingerprint(m), src, self.kind_of(m), m.get("permalink"),
+                             m.get("caption"), "new", time.time()))
+        else:
+            self.db.execute("UPDATE items SET status='new' WHERE media_id=?", (m["id"],))
+        self.db.commit()
+        if self.already_on_store(m):
+            self.tg.text("⚠️ Looks like this is already on your page - sending it anyway, reject it if it's a repeat.")
+        self.prepare(m, src)
+
+    def link_via_ytdlp(self, code):
+        """Fallback for accounts the API can't read: get the post with yt-dlp."""
+        url = f"https://www.instagram.com/reel/{code}/"
+        try:
+            ytdlp = shutil.which("yt-dlp") or "yt-dlp"
+            cmd = [ytdlp, "-j", "--no-warnings", url]
+            if PROXY:
+                cmd[1:1] = ["--proxy", PROXY]
+            info = json.loads(run(cmd, timeout=120).stdout)
+            return ({"id": f"link_{code}", "caption": info.get("description") or "", "media_type": "VIDEO",
+                     "permalink": url, "thumbnail_url": info.get("thumbnail"),
+                     "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+0000")},
+                    info.get("uploader_id") or info.get("channel") or "link")
+        except Exception as e:
+            log.warning("yt-dlp lookup failed: %s", e)
+            return None, None
+
     # ---- already on the store account?
     def load_store_posts(self):
         """Captions + thumbnail hashes of everything already on the store account (cached for 30 min)."""
@@ -1026,7 +1102,7 @@ class Bot:
                 return
             if txt.strip() in ("/start", "/id", "/help"):
                 self.tg.text("Commands:\n/best - top-performing reels from the last 30 days\n/best 5 - top 5\n"
-                             "/pending - re-send everything waiting for approval\n/status - counts\n/check - check the main accounts now\n/retry - re-post failed items"); return
+                             "Paste any Instagram reel/post link to prepare it for posting (add @username if it's not from the main accounts)\n/pending - re-send everything waiting for approval\n/status - counts\n/check - check the main accounts now\n/retry - re-post failed items"); return
             if txt.strip() == "/status":
                 c = dict(self.db.execute("SELECT status, COUNT(*) n FROM items GROUP BY status").fetchall())
                 self.tg.text("📊 " + ", ".join(f"{k}: {v}" for k, v in c.items())); return
@@ -1044,6 +1120,8 @@ class Bot:
                 self.tg.text(f"🔁 Retrying {n} failed item(s) now."); return
             if txt.strip() == "/check":
                 self.tg.text("🔎 Checking now..."); kv_set(self.db, "last_poll", 0); return
+            if not self.editing and self.LINK_RE.search(txt or ""):
+                self.handle_link(txt); return
             if self.editing and txt:
                 mid, self.editing = self.editing, None
                 self.db.execute("UPDATE items SET caption=? WHERE media_id=?", (txt, mid)); self.db.commit()
