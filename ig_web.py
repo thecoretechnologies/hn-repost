@@ -47,10 +47,45 @@ class IGWeb:
         raise RuntimeError("Instagram refused: " + "; ".join(errs))
 
     def user_id(self, username):
-        if username not in self._ids:
+        if username in self._ids:
+            return self._ids[username]
+        uid = None
+        try:
             j = self._get("/api/v1/users/web_profile_info/", username=username)
-            self._ids[username] = j["data"]["user"]["id"]
-        return self._ids[username]
+            uid = j["data"]["user"]["id"]
+        except Exception as e:
+            last = e
+        if not uid:   # fallback: read the id from the profile page
+            import re
+            r = self.s.get(f"https://www.instagram.com/{username}/", timeout=60,
+                           headers={"Accept": "text/html", "X-Requested-With": None})
+            for pat in (r'"profile_id":"(\d+)"', r'"user_id":"(\d+)"', r'profilePage_(\d+)',
+                        r'"id":"(\d+)","username":"' + re.escape(username) + '"'):
+                mm = re.search(pat, r.text)
+                if mm:
+                    uid = mm.group(1); break
+        if not uid:
+            raise RuntimeError(f"couldn't find @{username}'s id ({last if 'last' in dir() else 'profile page'})")
+        self._ids[username] = uid
+        return uid
+
+    def diag(self):
+        tests = [("home page", "https://www.instagram.com/", "html"),
+                 ("current user", "https://www.instagram.com/api/v1/accounts/current_user/?edit=true", "json"),
+                 ("current user (i.)", "https://i.instagram.com/api/v1/accounts/current_user/?edit=true", "json"),
+                 ("profile info", "https://www.instagram.com/api/v1/users/web_profile_info/?username=instagram", "json")]
+        for name, url, kind in tests:
+            try:
+                r = self.s.get(url, timeout=60, allow_redirects=False,
+                               headers={"Accept": "text/html"} if kind == "html" else {})
+                t = r.text[:200000]
+                state = ("LOGGED IN" if ('"viewerId":"' in t or '"username":' in t and '"pk"' in t or
+                                         ("viewer" in t and "not-logged-in" not in t[:3000]))
+                         else "logged out" if "not-logged-in" in t[:3000] or "login" in r.headers.get("location", "")
+                         else "?")
+                print(f"{name:20s} HTTP {r.status_code}  {r.headers.get('content-type','')[:25]:25s} {state}")
+            except Exception as e:
+                print(f"{name:20s} error {e}")
 
     def stories(self, username):
         uid = self.user_id(username)
@@ -79,6 +114,8 @@ if __name__ == "__main__":
     # quick test:  python3 ig_web.py cookies.txt hoodanutrition_official
     w = IGWeb(sys.argv[1])
     print("cookies found:", sorted(w.s.cookies.keys()))
+    if "--diag" in sys.argv:
+        w.diag(); sys.exit()
     for u in sys.argv[2:] or ["hoodanutrition_official"]:
         st = w.stories(u)
         print(f"OK @{u}: {len(st)} story item(s) right now")
