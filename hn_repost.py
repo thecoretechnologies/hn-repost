@@ -679,6 +679,8 @@ class Bot:
         global PROXY, STORY_WATCHER
         PROXY = self.cfg.get("proxy") or None
         self.stories = None
+        if os.environ.get("HN_IG_SESSION_B64") and os.environ.get("HN_SPARE_IG_USERNAME"):
+            self.cfg["stories_enabled"] = True
         if self.cfg.get("stories_enabled") or self.cfg.get("spare_ig_username", "").find("PUT_") != 0:
             try:
                 STORY_WATCHER = StoryWatcher(self.cfg)
@@ -755,22 +757,40 @@ class Bot:
         if first_run:
             kv_set(self.db, "stories_initialised", 1)
 
+    def watermark_cfg(self):
+        w = self.cfg.get("watermark", {})
+        if not w.get("enabled", True):
+            return None
+        badge = w.get("badge", "assets/badge.png")
+        return dict(path=badge if os.path.isabs(badge) else os.path.join(BASE, badge), width=w.get("width", 220),
+                    x=w.get("x", 40), y=w.get("y", 150), opacity=w.get("opacity", 0.25))
+
     def build_story_files(self, it):
         mid = it["id"]; mdir = os.path.join(self.cfg["data_dir"], "media")
-        if it["is_video"]:
-            raw = download(it["url"], os.path.join(mdir, f"{mid}_raw.mp4"), proxy=True)
-            dur, _ = probe(raw)
-            final = os.path.join(mdir, f"{mid}.mp4")
-            if self.cfg.get("outro_on_stories", True) and dur + 3 <= 60:
-                add_outro(raw, self.cfg["outro_path"], final, self.cfg["video_encoder"])
-            else:
-                run(["ffmpeg", "-y", "-loglevel", "error", "-i", raw, "-c:v", "libx264", "-preset", "veryfast",
-                     "-crf", "20", "-pix_fmt", "yuv420p", "-c:a", "aac", "-movflags", "+faststart", final], timeout=600)
-            os.remove(raw)
-        else:
+        wm = self.watermark_cfg()
+        if not it["is_video"]:
             img = download(it["url"], os.path.join(mdir, f"{mid}.jpg"), proxy=True)
-            final = image_to_story_video(img, os.path.join(mdir, f"{mid}.mp4"))
+            raw = image_to_story_video(img, os.path.join(mdir, f"{mid}_raw.mp4"))
             os.remove(img)
+        else:
+            raw = download(it["url"], os.path.join(mdir, f"{mid}_raw.mp4"), proxy=True)
+        dur, _ = probe(raw)
+        final = os.path.join(mdir, f"{mid}.mp4")
+        if self.cfg.get("outro_on_stories", True) and dur + 3 <= 60:
+            add_outro(raw, self.cfg["outro_path"], final, self.cfg["video_encoder"], wm)
+        else:   # too long for the outro: watermark only
+            vf = ("scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,"
+                  "fps=30,setsar=1")
+            cmd = ["ffmpeg", "-y", "-loglevel", "error", "-i", raw]
+            if wm and os.path.exists(wm["path"]):
+                cmd += ["-i", wm["path"], "-filter_complex",
+                        f"[0:v]{vf}[b];[1:v]scale={wm['width']}:-1,format=rgba,colorchannelmixer=aa={wm['opacity']}[l];"
+                        f"[b][l]overlay={wm['x']}:{wm['y']},format=yuv420p[v]", "-map", "[v]", "-map", "0:a?"]
+            else:
+                cmd += ["-vf", vf + ",format=yuv420p"]
+            cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-c:a", "aac", "-movflags", "+faststart", final]
+            run(cmd, timeout=900)
+        os.remove(raw)
         return [{"type": "VIDEO", "path": final}]
 
     def prepare_story(self, it, user):
@@ -1008,12 +1028,7 @@ class Bot:
         files = []
         if kind == "REEL":
             raw = download_reel(m, os.path.join(mdir, f"{mid}_raw.mp4"))
-            wm = None
-            w = self.cfg.get("watermark", {})
-            if w.get("enabled", True):
-                badge = w.get("badge", "assets/badge.png")
-                wm = dict(path=badge if os.path.isabs(badge) else os.path.join(BASE, badge), width=w.get("width", 220),
-                          x=w.get("x", 40), y=w.get("y", 150), opacity=w.get("opacity", 0.25))
+            wm = self.watermark_cfg()
             final = add_outro(raw, self.cfg["outro_path"], os.path.join(mdir, f"{mid}.mp4"), self.cfg["video_encoder"], wm)
             f = {"type": "VIDEO", "path": final}
             if self.cfg.get("cover", {}).get("enabled", True):
