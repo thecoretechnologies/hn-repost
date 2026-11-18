@@ -1,0 +1,6 @@
+From https://github.com/thecoretechnologies/hn-repost
+ * branch            state      -> FETCH_HEAD
+ * [new branch]      state      -> origin/state
+fresh ['error']
+done frame.jpg
+exit 0
