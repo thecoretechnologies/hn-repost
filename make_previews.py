@@ -34,5 +34,5 @@ jobs = [("thumbnail_option3", cover, 220, 1.0),
         ("video_frame_watermark", frame, 220, 0.25)]
 for name, src, w, op in jobs:
     fc = f"[0:v]{base}[b];[1:v]scale={w}:-1,format=rgba,colorchannelmixer=aa={op}[l];[b][l]overlay=40:150"
-    subprocess.run(["ffmpeg","-y","-loglevel","error","-i",src,"-i","assets/badge_dark.png","-filter_complex",fc,"-frames:v","1",f"out/{name}.jpg"], check=True)
+    subprocess.run(["ffmpeg","-y","-loglevel","error","-i",src,"-i","assets/badge_dark_un.png","-filter_complex",fc,"-frames:v","1",f"out/{name}.jpg"], check=True)
 print("done", frame)
