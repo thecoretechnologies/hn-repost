@@ -250,7 +250,7 @@ class IG:
                            f"processing: {(vs.get('processing_phase') or {}).get('status')})")
 
     def _container(self, media_type, caption, carousel_item, **extra):
-        params = dict(media_type=media_type, **extra)
+        params = dict(media_type=media_type, **{k: v for k, v in extra.items() if v})
         if caption is not None:
             params["caption"] = caption
         if media_type == "REELS":
@@ -259,12 +259,13 @@ class IG:
             params["is_carousel_item"] = "true"
         return self.post(f"{self.cfg['ig_user_id']}/media", **params)
 
-    def _upload_video(self, path, media_type, caption=None, carousel_item=False):
+    def _upload_video(self, path, media_type, caption=None, carousel_item=False, extra=None):
+        extra = extra or {}
         """1) resumable upload of the file (twice)  2) fallback: host the file publicly and let Instagram fetch it."""
         errors = []
         for attempt in (1, 2):
             try:
-                j = self._container(media_type, caption, carousel_item, upload_type="resumable")
+                j = self._container(media_type, caption, carousel_item, upload_type="resumable", **extra)
                 cid = j["id"]
                 uri = j.get("uri") or f"https://rupload.facebook.com/ig-api-upload/{self.v}/{cid}"
                 size = os.path.getsize(path)
@@ -284,7 +285,7 @@ class IG:
         if url:
             try:
                 log.info("falling back to hosted URL upload")
-                cid = self._container(media_type, caption, carousel_item, video_url=url)["id"]
+                cid = self._container(media_type, caption, carousel_item, video_url=url, **extra)["id"]
                 self._wait(cid)
                 return cid
             except Exception as e:
@@ -306,7 +307,13 @@ class IG:
 
     def publish_item(self, kind, files, caption):
         if kind == "REEL":
-            cid = self._upload_video(files[0]["path"], "REELS", caption)
+            extra = {}
+            cov = files[0].get("cover")
+            if cov and os.path.exists(cov):
+                url = public_host(cov)
+                if url:
+                    extra["cover_url"] = url
+            cid = self._upload_video(files[0]["path"], "REELS", caption, extra=extra)
         elif kind == "IMAGE":
             cid = self._image(files[0]["url"], caption)
         elif kind == "STORY":
@@ -375,16 +382,27 @@ def probe(path):
     return float(j["format"]["duration"]), has_audio
 
 
-def add_outro(src, outro, dest, encoder="libx264"):
+def add_outro(src, outro, dest, encoder="libx264", watermark=None):
+    """watermark = dict(path=..., width=220, x=40, y=150, opacity=0.25) - faint logo on the main video (not the outro)"""
     dur, has_audio = probe(src)
     _, outro_audio = probe(outro)
     fade_st = max(dur - 0.45, 0)
     norm = ("scale=1080:1920:force_original_aspect_ratio=decrease,"
-            "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,fps=30,setsar=1,format=yuv420p")
+            "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,fps=30,setsar=1")
     afmt = "aformat=sample_rates=48000:channel_layouts=stereo"
     inputs = ["-i", src, "-i", outro]
-    fc = [f"[0:v]{norm}[v0]", f"[1:v]{norm}[v1]"]
     n = 2
+    fc = []
+    if watermark and os.path.exists(watermark["path"]):
+        inputs += ["-i", watermark["path"]]
+        fc.append(f"[0:v]{norm}[m0]")
+        fc.append(f"[{n}:v]scale={watermark.get('width', 220)}:-1,format=rgba,"
+                  f"colorchannelmixer=aa={watermark.get('opacity', 0.25)}[wm]")
+        fc.append(f"[m0][wm]overlay={watermark.get('x', 40)}:{watermark.get('y', 150)},format=yuv420p[v0]")
+        n += 1
+    else:
+        fc.append(f"[0:v]{norm},format=yuv420p[v0]")
+    fc.append(f"[1:v]{norm},format=yuv420p[v1]")
     if has_audio:
         fc.append(f"[0:a]{afmt},afade=t=out:st={fade_st:.2f}:d=0.45[a0]")
     else:
@@ -394,7 +412,7 @@ def add_outro(src, outro, dest, encoder="libx264"):
         fc.append(f"[1:a]{afmt}[a1]")
     else:
         inputs += ["-f", "lavfi", "-t", "3", "-i", "anullsrc=r=48000:cl=stereo"]
-        fc.append(f"[{n}:a]{afmt}[a1]")
+        fc.append(f"[{n}:a]{afmt}[a1]"); n += 1
     fc.append("[v0][a0][v1][a1]concat=n=2:v=1:a=1[v][a]")
     venc = ["-c:v", encoder]
     venc += ["-b:v", "6M"] if "videotoolbox" in encoder else ["-preset", "veryfast", "-crf", "21", "-maxrate", "6M", "-bufsize", "12M"]
@@ -402,6 +420,30 @@ def add_outro(src, outro, dest, encoder="libx264"):
          "-map", "[v]", "-map", "[a]", *venc, "-pix_fmt", "yuv420p", "-profile:v", "high",
          "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-movflags", "+faststart", dest], timeout=1800)
     return dest
+
+
+def make_cover(cfg, m, video, dest):
+    """Reel cover: original thumbnail (or a frame of the video) at 1080x1920 with the store badge."""
+    src = dest + "_src.jpg"
+    got = False
+    if m.get("thumbnail_url"):
+        try:
+            download(m["thumbnail_url"], src); got = True
+        except Exception as e:
+            log.warning("thumbnail download failed: %s", e)
+    if not got:
+        run(["ffmpeg", "-y", "-loglevel", "error", "-ss", "1", "-i", video, "-frames:v", "1", src])
+    c = cfg.get("cover", {})
+    badge = c.get("badge", os.path.join(BASE, "assets", "badge.png"))
+    if not os.path.isabs(badge):
+        badge = os.path.join(BASE, badge)
+    fc = ("[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920[b];"
+          f"[1:v]scale={c.get('width', 220)}:-1[l];[b][l]overlay={c.get('x', 40)}:{c.get('y', 290)}")
+    run(["ffmpeg", "-y", "-loglevel", "error", "-i", src, "-i", badge, "-filter_complex", fc,
+         "-frames:v", "1", "-q:v", "2", dest])
+    os.remove(src)
+    return dest
+
 
 def public_host(path):
     """Upload the file as an asset of a 'media' release in this GitHub repo and return a public URL.
@@ -518,6 +560,13 @@ class TG:
         except Exception as e:
             log.warning("preview send failed (%s), sending text only", e)
             m = self.text(body + f"\n\n(preview unavailable: {e})", reply_markup=kb)
+        if first.get("cover") and os.path.exists(first["cover"]):
+            try:
+                with open(first["cover"], "rb") as f:
+                    self.call("sendPhoto", files={"photo": f}, http_timeout=120, chat_id=self.chat,
+                              caption="🖼 Cover (thumbnail) for this reel")
+            except Exception as e:
+                log.warning("cover preview failed: %s", e)
         if len(files) > 1:
             self.text(f"ℹ️ Carousel with {len(files)} items - only the first is previewed.")
         return m["message_id"]
@@ -718,9 +767,21 @@ class Bot:
         files = []
         if kind == "REEL":
             raw = download_reel(m, os.path.join(mdir, f"{mid}_raw.mp4"))
-            final = add_outro(raw, self.cfg["outro_path"], os.path.join(mdir, f"{mid}.mp4"), self.cfg["video_encoder"])
+            wm = None
+            w = self.cfg.get("watermark", {})
+            if w.get("enabled", True):
+                badge = w.get("badge", "assets/badge.png")
+                wm = dict(path=badge if os.path.isabs(badge) else os.path.join(BASE, badge), width=w.get("width", 220),
+                          x=w.get("x", 40), y=w.get("y", 150), opacity=w.get("opacity", 0.25))
+            final = add_outro(raw, self.cfg["outro_path"], os.path.join(mdir, f"{mid}.mp4"), self.cfg["video_encoder"], wm)
+            f = {"type": "VIDEO", "path": final}
+            if self.cfg.get("cover", {}).get("enabled", True):
+                try:   # cover is made from the original (un-watermarked) video/thumbnail
+                    f["cover"] = make_cover(self.cfg, m, raw, os.path.join(mdir, f"{mid}_cover.jpg"))
+                except Exception as e:
+                    log.warning("cover failed: %s", e)
             os.remove(raw)
-            files.append({"type": "VIDEO", "path": final})
+            files.append(f)
         elif kind == "IMAGE":
             files.append({"type": "IMAGE", "url": m["media_url"]})
         else:
@@ -848,8 +909,9 @@ class Bot:
             kv_set(self.db, "last_post", time.time())
             self.tg.text(f"📤 Posted: {link}")
             for f in files:
-                if f.get("path") and os.path.exists(f["path"]):
-                    os.remove(f["path"])
+                for k in ("path", "cover"):
+                    if f.get(k) and os.path.exists(f[k]):
+                        os.remove(f[k])
         except Exception as e:
             log.exception("publish failed")
             self.db.execute("UPDATE items SET status='failed', error=? WHERE media_id=?", (str(e), row["media_id"]))

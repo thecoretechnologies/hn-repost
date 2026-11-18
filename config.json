@@ -79,5 +79,20 @@
     "#fitness",
     "#bodybuilding",
     "#delhigym"
-  ]
+  ],
+  "cover": {
+    "enabled": true,
+    "badge": "assets/badge.png",
+    "width": 220,
+    "x": 40,
+    "y": 290
+  },
+  "watermark": {
+    "enabled": true,
+    "badge": "assets/badge.png",
+    "width": 220,
+    "x": 40,
+    "y": 150,
+    "opacity": 0.25
+  }
 }
