@@ -1,0 +1,12 @@
+From https://github.com/thecoretechnologies/hn-repost
+ * branch            state      -> FETCH_HEAD
+ * [new branch]      state      -> origin/state
+CAPTION 268 'Jai Hind Jai Bharat 🇮🇳\n\n📍 Hooda Nutrition, Uttam Nagar\n📞 WhatsApp: 8527150060, 8527150040\n🏬 Near Nawada Metro Pillar 719\n\n#hoodanutrition #uttamnagar #uttamnagardelhi #nawada #dwarka #janakpuri #westdelhi #supplements #wheyprotein #gym #fitness #bodybuilding #delhigym'
+TAGS 13
+fresh keys ['error']
+FILES [{'type': 'VIDEO', 'path': '/home/runner/work/hn-repost/hn-repost/data/media/17957678502292297.mp4', 'cover': '/home/runner/work/hn-repost/hn-repost/data/media/17957678502292297_cover.jpg'}]
+URL https://github.com/thecoretechnologies/hn-repost/releases/download/media/1794983722_17957678502292297.mp4
+HEAD 200 application/octet-stream 20001071
+no caption container OK 18026696315706659
+caption container OK 18026696318706659
+exit 0
