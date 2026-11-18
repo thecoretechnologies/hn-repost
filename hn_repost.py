@@ -13,7 +13,7 @@ Run:  python3 hn_repost.py            (normal loop)
       python3 hn_repost.py --test-caption "text"   (show caption rewrite)
 """
 import json, os, re, sys, time, sqlite3, subprocess, shutil, logging, hashlib, argparse
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import requests
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -902,6 +902,25 @@ class Bot:
             log.warning("refresh failed for %s: %s", row["media_id"], e)
         return raw
 
+    def show_queue(self):
+        gap = self.cfg["min_minutes_between_posts"] * 60
+        nxt = max(time.time(), float(kv_get(self.db, "last_post", 0)) + gap)
+        q = self.db.execute("SELECT * FROM items WHERE status='approved' ORDER BY approved_at").fetchall()
+        pend = self.db.execute("SELECT COUNT(*) FROM items WHERE status='pending'").fetchone()[0]
+        failed = self.db.execute("SELECT COUNT(*) FROM items WHERE status='failed'").fetchone()[0]
+        if not q:
+            self.tg.text(f"📭 Queue is empty.\n⏳ Waiting for your approval: {pend}\n⚠️ Failed: {failed}"
+                         + ("  (send /retry)" if failed else "")); return
+        self.tg.text(f"🗓 {len(q)} approved item(s) in the queue (one every {gap // 60} min):")
+        for i, r in enumerate(q):
+            eta = datetime.fromtimestamp(nxt + i * gap, timezone.utc) + timedelta(hours=5, minutes=30)
+            first = (r["caption"] or "").split("\n")[0][:80] or "(no caption)"
+            self.tg.text(f"{i + 1}. {r['media_type'].title()} from @{r['source']} · ~{eta:%I:%M %p} IST\n{first}\n{r['permalink']}",
+                         reply_markup=json.dumps({"inline_keyboard": [[
+                             {"text": "⚡ Post now", "callback_data": f"now:{r['media_id']}"},
+                             {"text": "🗑 Remove", "callback_data": f"rm:{r['media_id']}"}]]}))
+        self.tg.text(f"⏳ Waiting for your approval: {pend}" + (f"\n⚠️ Failed: {failed} (send /retry)" if failed else ""))
+
     def resend_pending(self):
         rows = self.db.execute("SELECT * FROM items WHERE status='pending' ORDER BY created").fetchall()
         if not rows:
@@ -1164,7 +1183,10 @@ class Bot:
             act, mid = q["data"].split(":", 1)
             row = self.row(mid)
             note = ""
-            if act == "now" and row and row["status"] in ("pending", "approved", "failed"):
+            if act == "rm" and row and row["status"] in ("approved", "pending", "failed"):
+                self.db.execute("UPDATE items SET status='rejected' WHERE media_id=?", (mid,))
+                note = "Removed from the queue"
+            elif act == "now" and row and row["status"] in ("pending", "approved", "failed"):
                 # jump the queue: front of the line and no waiting gap
                 self.db.execute("UPDATE items SET status='approved', approved_at=0, error=NULL WHERE media_id=?", (mid,))
                 kv_set(self.db, "last_post", 0)
@@ -1184,7 +1206,7 @@ class Bot:
             self.db.commit()
             try:
                 self.tg.call("answerCallbackQuery", callback_query_id=q["id"], text=note)
-                if act in ("ok", "no", "now") and note != "Already handled":
+                if act in ("ok", "no", "now", "rm") and note != "Already handled":
                     self.tg.call("editMessageReplyMarkup", chat_id=self.tg.chat, message_id=q["message"]["message_id"],
                                  reply_markup=json.dumps({"inline_keyboard": [[{"text": note, "callback_data": "noop:0"}]]}))
             except Exception:
@@ -1202,7 +1224,7 @@ class Bot:
                 return
             if txt.strip() in ("/start", "/id", "/help"):
                 self.tg.text("Commands:\n/best - top-performing reels from the last 30 days\n/best 5 - top 5\n"
-                             "Paste any Instagram reel/post link to prepare it for posting (add @username if it's not from the main accounts)\n/pending - re-send everything waiting for approval\n/status - counts\n/check - check the main accounts now\n/retry - re-post failed items"); return
+                             "Paste any Instagram reel/post link to prepare it for posting (add @username if it's not from the main accounts)\n/queue - what's approved and when it will post\n/pending - re-send everything waiting for approval\n/status - counts\n/check - check the main accounts now\n/retry - re-post failed items"); return
             if txt.strip() == "/status":
                 c = dict(self.db.execute("SELECT status, COUNT(*) n FROM items GROUP BY status").fetchall())
                 self.tg.text("📊 " + ", ".join(f"{k}: {v}" for k, v in c.items())); return
@@ -1211,6 +1233,8 @@ class Bot:
                 n = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
                 self.tg.text("🔎 Looking for top-performing reels...")
                 self.pick_best(count=n, manual=True); return
+            if txt.strip() in ("/queue", "/q"):
+                self.show_queue(); return
             if txt.strip() == "/accounts":
                 try:
                     j = self.ig.get("me/accounts", fields="name,instagram_business_account{id,username}")
