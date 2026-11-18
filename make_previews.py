@@ -1,6 +1,6 @@
 import sqlite3, json, subprocess, sys, requests, os
 db = sqlite3.connect("state.db")
-mid = sys.argv[1].strip()
+mid = sys.argv[1].split()[0]
 raw = json.loads(db.execute("SELECT raw FROM items WHERE media_id=?", (mid,)).fetchone()[0])
 os.makedirs("out", exist_ok=True)
 def get(url, dest):

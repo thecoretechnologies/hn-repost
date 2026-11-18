@@ -17,6 +17,7 @@ jobs:
           set +e
           {
             git fetch --depth 1 origin state && git show FETCH_HEAD:state.db > state.db
+            sudo apt-get install -y -qq ffmpeg >/dev/null 2>&1
             pip install -q requests
             python make_previews.py "$(cat request.txt)"
           } > out_log.txt 2>&1
