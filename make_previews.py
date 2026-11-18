@@ -1,14 +1,16 @@
 import sqlite3, json, subprocess, sys, requests, os
 db = sqlite3.connect("state.db")
 mid = sys.argv[1].split()[0]
-if mid == "latest":
+if mid == "latest" or mid.startswith("store:"):
+    idx = int(mid.split(":")[1]) if ":" in mid else 0
     tok0 = os.environ.get("HN_ACCESS_TOKEN")
     media = requests.get("https://graph.facebook.com/v27.0/17841451199740926/media",
                          params={"fields": "id,media_type,media_product_type,thumbnail_url,media_url,permalink,timestamp",
                                  "limit": 25, "access_token": tok0}, timeout=30).json()
     for m in media.get("data", []):
         print("store media:", m.get("timestamp"), m.get("media_type"), m.get("permalink"))
-    raw = next(m for m in media["data"] if m.get("media_type") == "VIDEO")
+    vids = [m for m in media["data"] if m.get("media_type") == "VIDEO"]
+    raw = vids[idx]
     mid = raw["id"]
     print("USING", raw.get("permalink"))
 else:
@@ -42,8 +44,8 @@ except Exception as e:
     print("video frame failed, using cover:", e)
     frame = cover
 jobs = [("thumbnail_option3", cover, 220, 1.0, 290),     # 290: inside the 3:4 profile-grid crop (top 240px is cut)
-        ("video_frame_watermark", frame, 220, 0.25, 150)]
+        ]
 for name, src, w, op, ypos in jobs:
     fc = f"[0:v]{base}[b];[1:v]scale={w}:-1,format=rgba,colorchannelmixer=aa={op}[l];[b][l]overlay=40:{ypos}"
-    subprocess.run(["ffmpeg","-y","-loglevel","error","-i",src,"-i","assets/badge_dark_un.png","-filter_complex",fc,"-frames:v","1",f"out/{name}.jpg"], check=True)
+    subprocess.run(["ffmpeg","-y","-loglevel","error","-i",src,"-i","assets/badge_dark_un.png","-filter_complex",fc,"-frames:v","1",f"out/{name}_{mid}.jpg"], check=True)
 print("done", frame)
