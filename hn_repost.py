@@ -287,43 +287,43 @@ class IG:
         params = dict(media_type=media_type, **{k: v for k, v in extra.items() if v})
         if caption is not None:
             params["caption"] = caption
-        if media_type == "REELS":
-            params["share_to_feed"] = "true"
         if carousel_item:
             params["is_carousel_item"] = "true"
         return self.post(f"{self.cfg['ig_user_id']}/media", **params)
 
     def _upload_video(self, path, media_type, caption=None, carousel_item=False, extra=None):
-        extra = extra or {}
-        """1) resumable upload of the file (twice)  2) fallback: host the file publicly and let Instagram fetch it."""
+        """1) host the file publicly and let Instagram fetch it (reliable for any length)
+           2) fallback: direct (resumable) upload - Instagram rejects this for longer videos"""
+        extra = dict(extra or {})
         errors = []
-        for attempt in (1, 2):
-            try:
-                j = self._container(media_type, caption, carousel_item, upload_type="resumable", **extra)
-                cid = j["id"]
-                uri = j.get("uri") or f"https://rupload.facebook.com/ig-api-upload/{self.v}/{cid}"
-                size = os.path.getsize(path)
-                with open(path, "rb") as f:
-                    r = requests.post(uri, headers={"Authorization": f"OAuth {self.tok}", "offset": "0",
-                                                    "file_size": str(size)}, data=f, timeout=900)
-                log.info("upload try %d %s (%d bytes) -> HTTP %s %s", attempt, cid, size, r.status_code, r.text[:300])
-                if r.status_code != 200 or '"success":true' not in r.text.replace(" ", ""):
-                    raise RuntimeError(f"upload HTTP {r.status_code}: {r.text[:200]}")
-                self._wait(cid)
-                return cid
-            except Exception as e:
-                errors.append(f"try {attempt}: {e}")
-                log.warning("resumable upload failed (%s)", e)
-                time.sleep(15)
         url = public_host(path)
         if url:
-            try:
-                log.info("falling back to hosted URL upload")
-                cid = self._container(media_type, caption, carousel_item, video_url=url, **extra)["id"]
-                self._wait(cid)
-                return cid
-            except Exception as e:
-                errors.append(f"hosted: {e}")
+            for attempt in (1, 2):
+                try:
+                    cid = self._container(media_type, caption, carousel_item, video_url=url, **extra)["id"]
+                    self._wait(cid)
+                    return cid
+                except Exception as e:
+                    errors.append(f"hosted try {attempt}: {e}")
+                    log.warning("hosted upload failed: %s", e)
+                    if "cover" in str(e).lower() or "Invalid parameter" in str(e):
+                        extra.pop("cover_url", None)      # retry without the custom cover
+                    time.sleep(10)
+        try:
+            j = self._container(media_type, caption, carousel_item, upload_type="resumable", **extra)
+            cid = j["id"]
+            uri = j.get("uri") or f"https://rupload.facebook.com/ig-api-upload/{self.v}/{cid}"
+            size = os.path.getsize(path)
+            with open(path, "rb") as f:
+                r = requests.post(uri, headers={"Authorization": f"OAuth {self.tok}", "offset": "0",
+                                                "file_size": str(size)}, data=f, timeout=900)
+            log.info("direct upload %s (%d bytes) -> HTTP %s %s", cid, size, r.status_code, r.text[:300])
+            if r.status_code != 200:
+                raise RuntimeError(f"direct upload HTTP {r.status_code}: {r.text[:200]}")
+            self._wait(cid)
+            return cid
+        except Exception as e:
+            errors.append(f"direct: {e}")
         raise RuntimeError("video upload failed - " + " | ".join(errors))
 
     def _image(self, url, caption=None, carousel_item=False):
@@ -364,7 +364,10 @@ class IG:
             self._wait(cid, 300)
         else:
             raise RuntimeError(f"unknown kind {kind}")
-        return self.publish(cid)
+        try:
+            return self.publish(cid)
+        finally:
+            cleanup_hosted()
 
 # ----------------------------------------------------------------- media
 def run(cmd, **kw):
@@ -495,7 +498,19 @@ def public_host(path):
     shutil.copy(path, tmp)
     subprocess.run(["gh", "release", "upload", "media", tmp, "-R", repo, "--clobber"], check=True, capture_output=True)
     os.remove(tmp)
+    HOSTED.append(name)
     return f"https://github.com/{repo}/releases/download/media/{name}"
+
+
+HOSTED = []
+
+
+def cleanup_hosted():
+    """Delete the temporary files from the GitHub release once Instagram has them."""
+    repo = os.environ.get("GITHUB_REPOSITORY")
+    while HOSTED and repo:
+        name = HOSTED.pop()
+        subprocess.run(["gh", "release", "delete-asset", "media", name, "-R", repo, "-y"], capture_output=True)
 
 
 def image_to_story_video(img, dest, seconds=6):
