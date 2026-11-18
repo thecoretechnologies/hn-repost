@@ -10,6 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       HN_ACCESS_TOKEN: ${{ secrets.HN_ACCESS_TOKEN }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
       - name: Build previews

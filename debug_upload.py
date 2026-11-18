@@ -49,9 +49,14 @@ def up(path, how):
     print("  status:", status(cid))
 def mk(name, args):
     subprocess.run(["ffmpeg","-y","-loglevel","error"]+args+["-movflags","+faststart",name],check=True); probe(name)
-mk("t30.mp4", ["-i","real.mp4","-t","30","-c","copy"])
-mk("t58.mp4", ["-i","real.mp4","-t","58","-c","copy"])
-mk("silent.mp4", ["-i","real.mp4","-f","lavfi","-i","anullsrc=r=48000:cl=stereo","-map","0:v","-map","1:a","-shortest","-c:v","copy","-c:a","aac"])
-for n in ("t30.mp4","t58.mp4","silent.mp4"):
-    print("== " + n + " bytes"); up(n, "bytes")
-print("== REAL chunks (continue on 206)"); up("real.mp4","chunks")
+for t in (36, 42, 48, 54):
+    mk(f"t{t}.mp4", ["-i","real.mp4","-t",str(t),"-c","copy"])
+    print(f"== t{t} bytes"); up(f"t{t}.mp4","bytes")
+# hosted URL route for the full video
+subprocess.run(["gh","release","create","debug","-R",os.environ["GITHUB_REPOSITORY"],"-t","debug","-n","debug"],capture_output=True)
+subprocess.run(["gh","release","upload","debug","real.mp4","-R",os.environ["GITHUB_REPOSITORY"],"--clobber"],check=True,capture_output=True)
+url=f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/releases/download/debug/real.mp4"
+print("== hosted full video", url)
+code,t=P(f"{G}/{IG}/media", media_type="REELS", video_url=url, caption="debug"); print("  container:",code,t)
+cid=json.loads(t).get("id")
+if cid: print("  status:", status(cid))
