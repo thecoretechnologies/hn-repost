@@ -21,7 +21,7 @@ jobs:
             sudo apt-get install -y -qq ffmpeg >/dev/null 2>&1
             pip install -q requests
             pip install -q -r requirements.txt 2>/dev/null || pip install -q requests Pillow
-            python debug_upload.py
+            sudo apt-get install -y -qq tesseract-ocr >/dev/null 2>&1; pip install -q pytesseract; python ocr_probe.py
           } > out_log.txt 2>&1
           echo "exit $?" >> out_log.txt
           true
