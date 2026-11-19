@@ -38,9 +38,9 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: Cache system packages
+      - name: Restore package cache
         id: aptcache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: ~/aptdebs
           key: apt-${{ runner.os }}-ffmpeg-tesseract-v1
@@ -54,12 +54,19 @@ jobs:
              && which ffmpeg tesseract >/dev/null; then
             echo "installed from cache"
           else
-            sudo apt-get update -qq -o Acquire::Retries=3
+            sudo timeout 900 apt-get update -qq -o Acquire::Retries=3 -o Acquire::http::Timeout=20
             sudo apt-get install -y -qq --no-install-recommends -o Dir::Cache::archives=$HOME/aptdebs $PKGS >/dev/null
             sudo chown -R $USER ~/aptdebs
           fi
           ffmpeg -version | head -1; tesseract --version | head -1
           pip install -q -r requirements.txt
+
+      - name: Save package cache
+        if: steps.aptcache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/aptdebs
+          key: apt-${{ runner.os }}-ffmpeg-tesseract-v1
 
       - name: Run bot (about 15 minutes)
         env:
