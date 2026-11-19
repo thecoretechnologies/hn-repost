@@ -939,6 +939,7 @@ class Bot:
 
     def send_manual(self, row):
         """Manual posting: send the finished video, cover, caption and original link as separate messages."""
+        log.info("preparing manual package for %s", row["media_id"])
         files = json.loads(row["files"]) if row["files"] else []
         if not files or any(f.get("path") and not os.path.exists(f["path"]) for f in files):
             raw = self.fresh_raw(row) if row["media_type"] != "STORY" else json.loads(row["raw"] or "{}")
@@ -1294,6 +1295,7 @@ class Bot:
                 return
             act, mid = q["data"].split(":", 1)
             row = self.row(mid)
+            log.info("button %s on %s (status %s)", act, mid, row["status"] if row else None)
             note = ""
             if act == "rm" and row and row["status"] in ("approved", "pending", "failed"):
                 self.db.execute("UPDATE items SET status='rejected' WHERE media_id=?", (mid,))
