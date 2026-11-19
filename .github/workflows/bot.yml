@@ -40,8 +40,9 @@ jobs:
 
       - name: Install
         run: |
+          sudo rm -f /var/lib/man-db/auto-update   # man-page indexing makes apt installs very slow on runners
           PKGS="ffmpeg tesseract-ocr tesseract-ocr-eng"
-          sudo timeout 300 apt-get install -y -qq --no-install-recommends $PKGS >/dev/null 2>&1 \
+          sudo timeout 600 apt-get install -y -qq --no-install-recommends $PKGS >/dev/null 2>&1 \
             || (sudo timeout 600 apt-get update -qq -o Acquire::Retries=2 && sudo apt-get install -y -qq --no-install-recommends $PKGS >/dev/null)
           pip install -q -r requirements.txt
 
