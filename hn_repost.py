@@ -1022,12 +1022,12 @@ class Bot:
                 m = self.ig.find_by_code(u, code, 300 if u == user else 150)
             except Exception as e:
                 log.warning("lookup in @%s failed: %s", u, e); m = None
-                if u == user:
-                    self.tg.text(f"⚠️ Couldn't read @{u}: {e}\n(Only business/creator accounts can be read this way.)")
             if m:
                 src = u; break
         if not m:
             m, src = self.link_via_ytdlp(code)
+            if m and user:
+                src = user          # show the account name instead of a numeric id
         if not m:
             self.tg.text("❌ Couldn't fetch that post" + (f" from @{user}" if user else "") + ". It may be from a "
                          "private/personal account, or Instagram's API is blocked right now - try /retry later.")
