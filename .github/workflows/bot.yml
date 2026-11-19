@@ -40,7 +40,9 @@ jobs:
 
       - name: Install
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg tesseract-ocr >/dev/null
+          PKGS="ffmpeg tesseract-ocr tesseract-ocr-eng"
+          sudo timeout 300 apt-get install -y -qq --no-install-recommends $PKGS >/dev/null 2>&1 \
+            || (sudo timeout 600 apt-get update -qq -o Acquire::Retries=2 && sudo apt-get install -y -qq --no-install-recommends $PKGS >/dev/null)
           pip install -q -r requirements.txt
 
       - name: Run bot (about 9 minutes)
