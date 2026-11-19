@@ -997,16 +997,20 @@ class Bot:
                 log.exception("resend failed")
                 self.tg.text(f"⚠️ Couldn't re-send {row['permalink']}: {e}")
 
-    LINK_RE = re.compile(r"instagram\.com/(?:[\w.]+/)?(reel|reels|p|tv)/([\w-]+)")
+    LINK_RE = re.compile(r"instagram\.com/(?:([\w.]+)/)?(reel|reels|p|tv)/([\w-]+)")
 
     def handle_link(self, text):
         mm = self.LINK_RE.search(text)
-        code = mm.group(2)
-        user = None
+        code = mm.group(3)
+        user = mm.group(1) if mm.group(1) not in (None, "stories") else None
         um = re.search(r"@([\w.]+)", text.replace(mm.group(0), ""))
         if um:
             user = um.group(1)
         self.tg.text(f"🔎 Fetching {code}...")
+        if not user:
+            user = self.resolve_owner(f"https://www.instagram.com/{mm.group(2)}/{code}/", code)
+            if user:
+                log.info("link %s belongs to @%s", code, user)
         m, src = None, None
         for u in ([user] if user else []) + [a for a in self.cfg["source_accounts"] if a != user]:
             try:
@@ -1020,8 +1024,8 @@ class Bot:
         if not m:
             m, src = self.link_via_ytdlp(code)
         if not m:
-            self.tg.text("❌ Couldn't find that post. If it's from another account, send the link with the "
-                         "username, e.g.\nhttps://www.instagram.com/reel/" + code + "/ @username")
+            self.tg.text("❌ Couldn't fetch that post" + (f" from @{user}" if user else "") + ". It may be from a "
+                         "private/personal account, or Instagram's API is blocked right now - try /retry later.")
             return
         row = self.db.execute("SELECT status FROM items WHERE media_id=?", (m["id"],)).fetchone()
         if row and row["status"] == "posted":
@@ -1037,6 +1041,33 @@ class Bot:
         if self.already_on_store(m):
             self.tg.text("⚠️ Looks like this is already on your page - sending it anyway, reject it if it's a repeat.")
         self.prepare(m, src)
+
+    def resolve_owner(self, url, code):
+        """Work out which account posted a link: Meta's oEmbed endpoint first, then the public post page."""
+        try:
+            j = self.ig.get("instagram_oembed", url=url, omitscript="true")
+            name = j.get("author_name") or ""
+            if re.fullmatch(r"[\w.]+", name):
+                return name
+            blob = f'{j.get("author_url", "")} {j.get("html", "")}'
+            for m in re.finditer(r"instagram\.com/([\w.]+)/?[\"?\s]|\(@([\w.]+)\)", blob):
+                u = m.group(1) or m.group(2)
+                if u not in ("p", "reel", "reels", "tv", "explore"):
+                    return u
+        except Exception as e:
+            log.warning("oembed lookup failed: %s", e)
+        try:
+            r = requests.get(f"https://www.instagram.com/reel/{code}/", timeout=30, headers={
+                "User-Agent": "Mozilla/5.0 (compatible; facebookexternalhit/1.1)", "Accept-Language": "en"})
+            html = r.text
+            for pat in (r'"username":"([\w.]+)"', r'property="og:title" content="[^"]*?\(@([\w.]+)\)',
+                        r'content="[^"]*? - ([\w.]+) on [^"]*?"', r'@([\w.]+) on Instagram'):
+                m = re.search(pat, html)
+                if m:
+                    return m.group(1)
+        except Exception as e:
+            log.warning("public page lookup failed: %s", e)
+        return None
 
     def link_via_ytdlp(self, code):
         """Fallback for accounts the API can't read: get the post with yt-dlp."""
