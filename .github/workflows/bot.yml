@@ -40,7 +40,7 @@ jobs:
 
       - name: Install
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg >/dev/null
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg tesseract-ocr >/dev/null
           pip install -q -r requirements.txt
 
       - name: Run bot (about 9 minutes)

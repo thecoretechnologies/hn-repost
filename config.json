@@ -104,5 +104,16 @@
   "official_story_accounts": {},
   "paused": false,
   "manual_mode": true,
-  "check_now_token": "2026-11-19a"
+  "check_now_token": "2026-11-19a",
+  "store_phones": [
+    "8527150060",
+    "8527150040"
+  ],
+  "onscreen_replace": {
+    "enabled": true,
+    "phone": "8527150060",
+    "place": "Uttam Nagar",
+    "title": "Location / online order",
+    "title_alt": "Hooda Nutrition"
+  }
 }

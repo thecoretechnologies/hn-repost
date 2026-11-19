@@ -704,9 +704,11 @@ class TG:
     def send_review(self, row, files):
         cap = row["caption"] or ("(stories have no caption)" if row["media_type"] == "STORY" else "(no caption)")
         head = f"🆕 {row['media_type']} from @{row['source']}\n{row['permalink']}\n\n📝 New caption:\n"
+        first = files[0]
+        if first.get("note"):
+            head = first["note"] + "\n" + head
         body = (head + cap)[:1000]
         kb = self.kb(row["media_id"])
-        first = files[0]
         try:
             vpath = first.get("path")
             if vpath and os.path.getsize(vpath) >= 49_000_000:
@@ -877,6 +879,9 @@ class Bot:
             os.remove(img)
         else:
             raw = download(it["url"], os.path.join(mdir, f"{mid}_raw.mp4"), proxy=True)
+        clean, note = self.clean_onscreen(raw, mid)
+        if clean != raw:
+            os.remove(raw); raw = clean
         dur, _ = probe(raw)
         final = os.path.join(mdir, f"{mid}.mp4")
         if self.cfg.get("outro_on_stories", True) and dur + 3 <= 60:
@@ -894,7 +899,7 @@ class Bot:
             cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-c:a", "aac", "-movflags", "+faststart", final]
             run(cmd, timeout=900)
         os.remove(raw)
-        return [{"type": "VIDEO", "path": final}]
+        return [{"type": "VIDEO", "path": final, **({"note": note} if note else {})}]
 
     def prepare_story(self, it, user):
         mid = it["id"]; mdir = os.path.join(self.cfg["data_dir"], "media")
@@ -1214,21 +1219,40 @@ class Bot:
             kv_set(self.db, "best_date", today)
             self.pick_best()
 
+    def clean_onscreen(self, raw, mid):
+        """Cover other branches' phone numbers/addresses shown inside the video. Returns (video, note)."""
+        oc = self.cfg.get("onscreen_replace", {})
+        if not oc.get("enabled", True):
+            return raw, None
+        try:
+            from onscreen import replace_contacts
+        except ImportError as e:
+            log.warning("on-screen replacement unavailable: %s", e); return raw, None
+        ours = {re.sub(r"\D", "", p)[-10:] for p in self.cfg.get("store_phones", ["8527150060", "8527150040"])}
+        dest = os.path.join(self.cfg["data_dir"], "media", f"{mid}_clean.mp4")
+        return replace_contacts(raw, dest, oc, ours)
+
     def build_post_files(self, m):
         mid, kind = m["id"], self.kind_of(m)
         mdir = os.path.join(self.cfg["data_dir"], "media")
         files = []
         if kind == "REEL":
             raw = download_reel(m, os.path.join(mdir, f"{mid}_raw.mp4"))
+            clean, note = self.clean_onscreen(raw, mid)
             wm = self.watermark_cfg()
-            final = add_outro(raw, self.cfg["outro_path"], os.path.join(mdir, f"{mid}.mp4"), self.cfg["video_encoder"], wm)
+            final = add_outro(clean, self.cfg["outro_path"], os.path.join(mdir, f"{mid}.mp4"), self.cfg["video_encoder"], wm)
             f = {"type": "VIDEO", "path": final}
+            if note:
+                f["note"] = note
             if self.cfg.get("cover", {}).get("enabled", True):
-                try:   # cover is made from the original (un-watermarked) video/thumbnail
-                    f["cover"] = make_cover(self.cfg, m, raw, os.path.join(mdir, f"{mid}_cover.jpg"))
+                try:   # cover from the original thumbnail - or from the cleaned video if contacts were replaced
+                    src_m = {k: v for k, v in m.items() if k != "thumbnail_url"} if clean != raw else m
+                    f["cover"] = make_cover(self.cfg, src_m, clean, os.path.join(mdir, f"{mid}_cover.jpg"))
                 except Exception as e:
                     log.warning("cover failed: %s", e)
-            os.remove(raw)
+            for p in {raw, clean}:
+                if os.path.exists(p):
+                    os.remove(p)
             files.append(f)
         elif kind == "IMAGE":
             files.append({"type": "IMAGE", "url": m["media_url"]})
