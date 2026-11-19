@@ -22,7 +22,7 @@ permissions:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
 
@@ -38,15 +38,30 @@ jobs:
           python-version: "3.12"
           cache: pip
 
+      - name: Cache system packages
+        id: aptcache
+        uses: actions/cache@v4
+        with:
+          path: ~/aptdebs
+          key: apt-${{ runner.os }}-ffmpeg-tesseract-v1
+
       - name: Install
         run: |
           sudo rm -f /var/lib/man-db/auto-update   # man-page indexing makes apt installs very slow on runners
           PKGS="ffmpeg tesseract-ocr tesseract-ocr-eng"
-          sudo timeout 600 apt-get install -y -qq --no-install-recommends $PKGS >/dev/null 2>&1 \
-            || (sudo timeout 600 apt-get update -qq -o Acquire::Retries=2 && sudo apt-get install -y -qq --no-install-recommends $PKGS >/dev/null)
+          mkdir -p ~/aptdebs/partial
+          if ls ~/aptdebs/*.deb >/dev/null 2>&1 && sudo dpkg -i ~/aptdebs/*.deb >/dev/null 2>&1 \
+             && which ffmpeg tesseract >/dev/null; then
+            echo "installed from cache"
+          else
+            sudo apt-get update -qq -o Acquire::Retries=3
+            sudo apt-get install -y -qq --no-install-recommends -o Dir::Cache::archives=$HOME/aptdebs $PKGS >/dev/null
+            sudo chown -R $USER ~/aptdebs
+          fi
+          ffmpeg -version | head -1; tesseract --version | head -1
           pip install -q -r requirements.txt
 
-      - name: Run bot (about 9 minutes)
+      - name: Run bot (about 15 minutes)
         env:
           HN_ACCESS_TOKEN: ${{ secrets.HN_ACCESS_TOKEN }}
           HN_TELEGRAM_TOKEN: ${{ secrets.HN_TELEGRAM_TOKEN }}
@@ -55,7 +70,7 @@ jobs:
           HN_IG_COOKIES_B64: ${{ secrets.HN_IG_COOKIES_B64 }}
           HN_PROXY: ${{ secrets.HN_PROXY }}
           GH_TOKEN: ${{ github.token }}
-        run: python hn_repost.py --run-minutes 9 --best-now "${{ github.event.inputs.best_now || 0 }}"
+        run: python hn_repost.py --run-minutes 15 --best-now "${{ github.event.inputs.best_now || 0 }}"
 
       - name: Save state
         if: always()
