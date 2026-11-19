@@ -1407,6 +1407,10 @@ class Bot:
                 kv_set(self.db, "last_post", 0)
                 self.tg.text(f"🔁 Retrying https://www.instagram.com/reel/{short}/ now.")
         kv_set(self.db, "retry_done", json.dumps(sorted(done)))
+        ctok = self.cfg.get("check_now_token")
+        if ctok and kv_get(self.db, "check_done") != ctok:
+            kv_set(self.db, "check_done", ctok); kv_set(self.db, "last_poll", 0)
+            self.tg.text("🔎 Checking the main accounts for new posts now...")
         tok = self.cfg.get("resend_pending_token")
         if tok and kv_get(self.db, "resend_done") != tok:
             kv_set(self.db, "resend_done", tok)
