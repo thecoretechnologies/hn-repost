@@ -1553,6 +1553,18 @@ class Bot:
             self.report_failure(row, stage, e)
         self.db.commit()
 
+    def maybe_reauth_reminder(self):
+        """Meta's data access for the login lasts ~90 days; remind a week before it runs out."""
+        by = self.cfg.get("reauth_by")
+        if not by:
+            return
+        days = (datetime.strptime(by, "%Y-%m-%d").replace(tzinfo=IST) - ist_now()).days
+        today = ist_now().strftime("%Y-%m-%d")
+        if days <= 7 and kv_get(self.db, "reauth_alert") != today:
+            kv_set(self.db, "reauth_alert", today)
+            self.tg.text(f"🔑 Instagram access needs a quick re-login within {max(days, 0)} day(s) (by {by}). "
+                         "Ask Claude to \"renew the Meta login\" - it takes 2 minutes.")
+
     def maybe_refresh(self):
         last = float(kv_get(self.db, "token_refreshed", 0))
         secret = self.cfg.get("fb_app_secret", "")
@@ -1604,6 +1616,7 @@ class Bot:
                     and slot and float(kv_get(self.db, "last_poll", 0)) < slot):
                 kv_set(self.db, "last_poll", time.time())
                 self.maybe_refresh()
+                self.maybe_reauth_reminder()
                 self.check_sources()
                 self.maybe_pick_best()
             paused = self.cfg.get("paused") or kv_get(self.db, "paused") == "1"

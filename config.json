@@ -2,7 +2,7 @@
   "graph_api_version": "v27.0",
   "ig_user_id": "17841451199740926",
   "access_token": "(set in GitHub secret HN_ACCESS_TOKEN)",
-  "fb_app_id": "1084388714287870",
+  "fb_app_id": "1847093469932687",
   "fb_app_secret": "NOT_NEEDED_SYSTEM_USER_TOKEN_NEVER_EXPIRES",
   "telegram_bot_token": "(set in GitHub secret HN_TELEGRAM_TOKEN)",
   "telegram_chat_id": "5980558587",
@@ -127,5 +127,6 @@
   "active_hours_ist": [
     6,
     22
-  ]
+  ],
+  "reauth_by": "2027-02-18"
 }
