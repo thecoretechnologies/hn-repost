@@ -19,7 +19,8 @@ checks = [
  ("store ig", IG, {"fields": "username,followers_count,media_count"}),
  ("store media", f"{IG}/media", {"fields": "id,timestamp", "limit": 2}),
  ("publish limit", f"{IG}/content_publishing_limit", {"fields": "config,quota_usage"}),
- ("discovery", IG, {"fields": "business_discovery.username(hoodanutrition_official){username,media_count}"}),
+ ("discovery official", IG, {"fields": "business_discovery.username(hoodanutrition_official){username,media_count,media.limit(3){timestamp,permalink}}"}),
+ ("discovery fitharyanvi", IG, {"fields": "business_discovery.username(fitharyanvi){username,media_count,media.limit(3){timestamp,permalink}}"}),
 ]
 for name, path, p in checks:
     print(f"== {name}: {call(path, **p)}")
