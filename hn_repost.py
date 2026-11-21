@@ -1390,12 +1390,28 @@ class Bot:
         files = []
         if kind == "REEL":
             raw = download_reel(m, os.path.join(mdir, f"{mid}_raw.mp4"))
+            silent = not probe(raw)[1]
+            if silent:   # Instagram strips licensed music from API copies - try the public reel instead
+                log.warning("%s has no audio from the API; trying the public reel", mid)
+                try:
+                    alt = download_reel({k: v for k, v in m.items() if k != "media_url"},
+                                        os.path.join(mdir, f"{mid}_alt.mp4"))
+                    if os.path.exists(alt) and probe(alt)[1]:
+                        os.replace(alt, raw); silent = False
+                except Exception as e:
+                    log.warning("public reel download failed: %s", e)
             clean, note = self.clean_onscreen(raw, mid)
             wm = self.watermark_cfg()
             final = add_outro(clean, self.cfg["outro_path"], os.path.join(mdir, f"{mid}.mp4"), self.cfg["video_encoder"], wm)
             f = {"type": "VIDEO", "path": final}
             if note:
                 f["note"] = note
+            if silent:
+                f["silent"] = True
+                f["note"] = ("🔇 NO MUSIC: Instagram removed this reel's licensed song from the copy the bot gets, so it "
+                             "was NOT auto-posted. To post with music: tap 📥 Send files, then in Instagram open the "
+                             "original reel → tap the song name → Use audio → pick the saved video."
+                             + ("\n" + note if note else ""))
             if self.cfg.get("cover", {}).get("enabled", True):
                 try:   # cover from the original thumbnail - or from the cleaned video if contacts were replaced
                     src_m = {k: v for k, v in m.items() if k != "thumbnail_url"} if clean != raw else m
@@ -1427,6 +1443,9 @@ class Bot:
             caption = finalize_caption(rewrite_caption(m.get("caption"), self.cfg), self.cfg)
             self.db.execute("UPDATE items SET caption=?, files=?, raw=?, status=? WHERE media_id=?",
                             (caption, json.dumps(files), json.dumps(m), "approved" if auto else "pending", mid))
+            if auto and any(f.get("silent") for f in files):
+                auto = False
+                self.db.execute("UPDATE items SET status='pending' WHERE media_id=?", (mid,))
             if auto:
                 self.db.execute("UPDATE items SET approved_at=? WHERE media_id=?", (time.time(), mid))
             self.db.commit()
@@ -1473,6 +1492,10 @@ class Bot:
             elif act == "rm" and row and row["status"] in ("approved", "pending", "failed"):
                 self.db.execute("UPDATE items SET status='rejected' WHERE media_id=?", (mid,))
                 note = "Removed from the queue"
+            elif act == "now" and row and row["status"] == "pending" and '"silent": true' in (row["files"] or "") \
+                    and kv_get(self.db, f"silent_ok:{mid}") != "1":
+                kv_set(self.db, f"silent_ok:{mid}", "1")
+                note = "⚠️ This reel has no music. Tap ⚡ Post now again to post it silent anyway."
             elif act == "now" and row and row["status"] in ("pending", "approved", "failed"):
                 # jump the queue: front of the line and no waiting gap
                 self.db.execute("UPDATE items SET status='approved', approved_at=0, error=NULL WHERE media_id=?", (mid,))
@@ -1494,7 +1517,7 @@ class Bot:
             self.db.commit()
             try:
                 self.tg.call("answerCallbackQuery", callback_query_id=q["id"], text=note)
-                if act in ("ok", "no", "now", "rm", "rt", "mf") and note != "Already handled":
+                if act in ("ok", "no", "now", "rm", "rt", "mf") and note != "Already handled" and not note.startswith("⚠️"):
                     self.tg.call("editMessageReplyMarkup", chat_id=self.tg.chat, message_id=q["message"]["message_id"],
                                  reply_markup=json.dumps({"inline_keyboard": [[{"text": note, "callback_data": "noop:0"}]]}))
             except Exception:
