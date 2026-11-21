@@ -4,7 +4,9 @@ on:
   push:
     branches: [main]
   schedule:
-    - cron: "*/10 * * * *"     # GitHub may start runs a few minutes late
+    # daytime only: 06:00-22:00 IST (00:30-16:30 UTC); the bot sleeps at night
+    - cron: "30,40,50 0 * * *"
+    - cron: "*/10 1-16 * * *"
   workflow_dispatch:
     inputs:
       best_now:
@@ -94,4 +96,10 @@ jobs:
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run bot.yml -R "${{ github.repository }}" --ref main || true
+        run: |
+          H=$(TZ=Asia/Kolkata date +%H)
+          if [ "$H" -ge 6 ] && [ "$H" -lt 22 ]; then
+            gh workflow run bot.yml -R "${{ github.repository }}" --ref main || true
+          else
+            echo "night time in India ($H:xx) - not queuing; the 6am schedule restarts the bot"
+          fi

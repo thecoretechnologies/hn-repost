@@ -13,7 +13,7 @@ Run:  python3 hn_repost.py            (normal loop)
       python3 hn_repost.py --test-caption "text"   (show caption rewrite)
 """
 import json, os, re, sys, time, sqlite3, subprocess, shutil, logging, hashlib, argparse
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 import requests
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -420,6 +420,45 @@ def download(url, dest, proxy=False):
 
 
 START_TIME = time.time()
+IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def ist_now():
+    return datetime.now(IST)
+
+
+def is_active_hours(cfg):
+    a, b = cfg.get("active_hours_ist", [6, 22])
+    return a <= ist_now().hour < b
+
+
+def last_check_slot(cfg):
+    """Timestamp of the most recent scheduled check time (IST) that has already passed, or None."""
+    now = ist_now()
+    slots = []
+    for t in cfg.get("check_times_ist", ["06:00", "09:00", "12:00", "15:00", "18:00", "21:00"]):
+        h, m = map(int, t.split(":"))
+        slots.append(now.replace(hour=h, minute=m, second=0, microsecond=0))
+    past = [x for x in slots if x <= now]
+    return max(past).timestamp() if past else None
+
+
+def fail_hint(err):
+    e = err.lower()
+    if "access blocked" in e or "5258005" in e:
+        return ("Meta has blocked this app's API access, so Instagram refused the upload. It won't work until Meta lifts "
+                "the block - use 📥 Send files to post it yourself.")
+    if "processingfailed" in e or "timed out" in e or "processing" in e:
+        return "Instagram couldn't process the video. A retry usually works."
+    if "limit" in e or "rate" in e or "too many" in e:
+        return "Instagram's posting limit was hit. Retry after a few hours."
+    if "oauth" in e or "token" in e or "(code 190" in e:
+        return "The Instagram access token was rejected - send this report to Claude."
+    if "yt-dlp" in e or "download" in e or "404" in e or "not found" in e:
+        return "The original reel couldn't be downloaded - it may have been deleted or made private."
+    if "telegram" in e or "sendDocument" in e:
+        return "Telegram didn't accept the file. A retry usually works."
+    return "Unexpected error. Retry once; if it keeps failing, send this report to Claude."
 PROXY = None      # set from config "proxy" (e.g. a residential proxy) - used only for unofficial downloads
 STORY_WATCHER = None
 
@@ -697,18 +736,31 @@ class TG:
                  {"text": "❌ Reject", "callback_data": f"no:{mid}"}]]})
         return json.dumps({"inline_keyboard": [
             [{"text": "⚡ Post now", "callback_data": f"now:{mid}"},
-             {"text": "✅ Approve (queue)", "callback_data": f"ok:{mid}"}],
+             {"text": "📥 Send files", "callback_data": f"mf:{mid}"}],
             [{"text": "✏️ Edit caption", "callback_data": f"ed:{mid}"},
              {"text": "❌ Reject", "callback_data": f"no:{mid}"}]]})
 
-    def send_review(self, row, files):
+    @staticmethod
+    def kb_auto(mid):
+        return json.dumps({"inline_keyboard": [[{"text": "⏸ Hold - don't auto-post", "callback_data": f"hold:{mid}"}]]})
+
+    @staticmethod
+    def kb_failed(mid):
+        return json.dumps({"inline_keyboard": [
+            [{"text": "🔁 Retry this reel", "callback_data": f"rt:{mid}"},
+             {"text": "📥 Send files instead", "callback_data": f"mf:{mid}"}],
+            [{"text": "❌ Skip it", "callback_data": f"rm:{mid}"}]]})
+
+    def send_review(self, row, files, auto=False):
         cap = row["caption"] or ("(stories have no caption)" if row["media_type"] == "STORY" else "(no caption)")
         head = f"🆕 {row['media_type']} from @{row['source']}\n{row['permalink']}\n\n📝 New caption:\n"
+        if auto:
+            head = "🤖 Posting this automatically now\n" + head
         first = files[0]
         if first.get("note"):
             head = first["note"] + "\n" + head
         body = (head + cap)[:1000]
-        kb = self.kb(row["media_id"])
+        kb = self.kb_auto(row["media_id"]) if auto else self.kb(row["media_id"])
         try:
             vpath = first.get("path")
             if vpath and os.path.getsize(vpath) >= 49_000_000:
@@ -812,6 +864,11 @@ class Bot:
                 media = self.ig.recent_media(user)
             except Exception as e:
                 log.error("could not read @%s: %s", user, e)
+                today = ist_now().strftime("%Y-%m-%d")
+                if kv_get(self.db, "check_alert") != today:
+                    kv_set(self.db, "check_alert", today)
+                    self.tg.text(f"⚠️ Couldn't check @{user} for new reels:\n{str(e)[:300]}\n💡 {fail_hint(str(e))}\n"
+                                 "(I'll keep trying at the scheduled times; this notice is sent once a day.)")
                 continue
             for m in reversed(media):           # oldest first
                 fp = self.fingerprint(m)
@@ -827,7 +884,7 @@ class Bot:
                         self.db.execute("UPDATE items SET status='on_store' WHERE media_id=?", (m["id"],))
                         self.db.commit(); continue
                     found += 1
-                    self.prepare(m, user)
+                    self.prepare(m, user, auto=self.cfg.get("auto_post_new", False))
         if first_run:
             kv_set(self.db, "initialised", datetime.now(timezone.utc).isoformat())
             self.tg.text("✅ Repost bot is running. Existing posts were skipped; new ones will come here for approval.")
@@ -925,6 +982,25 @@ class Bot:
             log.warning("refresh failed for %s: %s", row["media_id"], e)
         return raw
 
+    def report_failure(self, row, stage, err):
+        mid = row["media_id"]
+        n = int(kv_get(self.db, f"attempts:{mid}", 0)) + 1
+        kv_set(self.db, f"attempts:{mid}", n)
+        e = str(err)
+        kind = {"REEL": "Reel", "STORY": "Story", "IMAGE": "Post", "CAROUSEL": "Carousel"}.get(row["media_type"], "Post")
+        msg = (f"⚠️ {kind} upload FAILED\n"
+               f"👤 From: @{row['source']}\n"
+               f"🔗 {row['permalink']}\n"
+               f"🕒 {ist_now().strftime('%d %b, %I:%M %p')}\n"
+               f"🧩 Failed while: {stage}\n"
+               f"🔁 Attempt: {n}\n"
+               f"❗ Error: {e[:700]}\n\n"
+               f"💡 {fail_hint(e)}")
+        try:
+            self.tg.text(msg, reply_markup=self.tg.kb_failed(mid))
+        except Exception:
+            self.tg.text(msg + "\n\nSend /failed to retry.")
+
     def fit_for_telegram(self, path):
         """Telegram bots can send files up to 50 MB; re-encode bigger videos to fit."""
         if os.path.getsize(path) < 48_000_000:
@@ -942,6 +1018,8 @@ class Bot:
         log.info("preparing manual package for %s", row["media_id"])
         files = json.loads(row["files"]) if row["files"] else []
         if not files or any(f.get("path") and not os.path.exists(f["path"]) for f in files):
+            if not row["raw"]:
+                raise RuntimeError("no saved details to rebuild this item - paste the reel link to the bot again")
             raw = self.fresh_raw(row) if row["media_type"] != "STORY" else json.loads(row["raw"] or "{}")
             files = self.build_story_files(raw) if row["media_type"] == "STORY" else self.build_post_files(raw)
         kind = {"REEL": "Reel", "STORY": "Story", "IMAGE": "Post", "CAROUSEL": "Carousel"}.get(row["media_type"], "Post")
@@ -1267,22 +1345,25 @@ class Bot:
                     files.append({"type": "IMAGE", "url": c["media_url"]})
         return files
 
-    def prepare(self, m, user):
+    def prepare(self, m, user, auto=False):
         mid, kind = m["id"], self.kind_of(m)
         mdir = os.path.join(self.cfg["data_dir"], "media")
+        self.db.execute("UPDATE items SET raw=? WHERE media_id=?", (json.dumps(m), mid)); self.db.commit()
         try:
             files = self.build_post_files(m)
             caption = finalize_caption(rewrite_caption(m.get("caption"), self.cfg), self.cfg)
-            self.db.execute("UPDATE items SET caption=?, files=?, raw=?, status='pending' WHERE media_id=?",
-                            (caption, json.dumps(files), json.dumps(m), mid))
+            self.db.execute("UPDATE items SET caption=?, files=?, raw=?, status=? WHERE media_id=?",
+                            (caption, json.dumps(files), json.dumps(m), "approved" if auto else "pending", mid))
+            if auto:
+                self.db.execute("UPDATE items SET approved_at=? WHERE media_id=?", (time.time(), mid))
             self.db.commit()
             row = self.row(mid)
-            msg_id = self.tg.send_review(row, files)
+            msg_id = self.tg.send_review(row, files, auto=auto)
             self.db.execute("UPDATE items SET tg_message_id=? WHERE media_id=?", (msg_id, mid)); self.db.commit()
         except Exception as e:
             log.exception("prepare failed for %s", mid)
             self.db.execute("UPDATE items SET status='failed', error=? WHERE media_id=?", (str(e), mid)); self.db.commit()
-            self.tg.text(f"⚠️ Couldn't prepare a {kind} from @{user}:\n{m.get('permalink')}\nReason: {e}")
+            self.report_failure(self.row(mid), "downloading / editing the video", e)
 
     def row(self, mid):
         return self.db.execute("SELECT * FROM items WHERE media_id=?", (mid,)).fetchone()
@@ -1297,7 +1378,24 @@ class Bot:
             row = self.row(mid)
             log.info("button %s on %s (status %s)", act, mid, row["status"] if row else None)
             note = ""
-            if act == "rm" and row and row["status"] in ("approved", "pending", "failed"):
+            if act == "rt" and row and row["status"] not in ("posted",):
+                self.db.execute("UPDATE items SET status='approved', approved_at=0, error=NULL WHERE media_id=?", (mid,))
+                kv_set(self.db, "last_post", 0)
+                note = "Retrying now - you'll get the result in a few minutes"
+            elif act == "mf" and row and row["status"] not in ("posted",):
+                self.db.execute("UPDATE items SET status='manual_req', error=NULL WHERE media_id=?", (mid,))
+                note = "Preparing files - they'll arrive here in a few minutes"
+            elif act == "hold" and row and row["status"] == "approved":
+                self.db.execute("UPDATE items SET status='pending' WHERE media_id=?", (mid,))
+                self.db.commit()
+                try:
+                    self.tg.call("answerCallbackQuery", callback_query_id=q["id"], text="Held - choose what to do")
+                    self.tg.call("editMessageReplyMarkup", chat_id=self.tg.chat, message_id=q["message"]["message_id"],
+                                 reply_markup=self.tg.kb(mid))
+                except Exception:
+                    pass
+                return
+            elif act == "rm" and row and row["status"] in ("approved", "pending", "failed"):
                 self.db.execute("UPDATE items SET status='rejected' WHERE media_id=?", (mid,))
                 note = "Removed from the queue"
             elif act == "now" and row and row["status"] in ("pending", "approved", "failed"):
@@ -1321,7 +1419,7 @@ class Bot:
             self.db.commit()
             try:
                 self.tg.call("answerCallbackQuery", callback_query_id=q["id"], text=note)
-                if act in ("ok", "no", "now", "rm") and note != "Already handled":
+                if act in ("ok", "no", "now", "rm", "rt", "mf") and note != "Already handled":
                     self.tg.call("editMessageReplyMarkup", chat_id=self.tg.chat, message_id=q["message"]["message_id"],
                                  reply_markup=json.dumps({"inline_keyboard": [[{"text": note, "callback_data": "noop:0"}]]}))
             except Exception:
@@ -1339,7 +1437,7 @@ class Bot:
                 return
             if txt.strip() in ("/start", "/id", "/help"):
                 self.tg.text("Commands:\n/best - top-performing reels from the last 30 days\n/best 5 - top 5\n"
-                             "Paste any Instagram reel/post link to prepare it for posting (add @username if it's not from the main accounts)\n/queue - what's approved and when it will post\n/pending - re-send everything waiting for approval\n/status - counts\n/check - check the main accounts now\n/retry - re-post failed items"); return
+                             "Paste any Instagram reel/post link to prepare it for posting\n/queue - what's approved and when it will post\n/pending - re-send everything waiting for approval\n/status - counts\n/check - check the main accounts now\n/failed - list failed reels with a Retry button for each\n/retry - retry all failed items\n\nNew reels are checked at 6am, 9am, 12pm, 3pm, 6pm and 9pm and posted automatically. The bot sleeps 10pm-6am."); return
             if txt.strip() == "/status":
                 c = dict(self.db.execute("SELECT status, COUNT(*) n FROM items GROUP BY status").fetchall())
                 self.tg.text("📊 " + ", ".join(f"{k}: {v}" for k, v in c.items())); return
@@ -1365,6 +1463,14 @@ class Bot:
                 return
             if txt.strip() == "/pending":
                 self.resend_pending(); return
+            if txt.strip() == "/failed":
+                rows = self.db.execute("SELECT * FROM items WHERE status='failed' ORDER BY created DESC LIMIT 10").fetchall()
+                if not rows:
+                    self.tg.text("✅ Nothing has failed."); return
+                for r in rows:
+                    self.tg.text(f"⚠️ @{r['source']} {r['media_type']}\n{r['permalink']}\n❗ {(r['error'] or '')[:300]}",
+                                 reply_markup=self.tg.kb_failed(r["media_id"]))
+                return
             if txt.strip() == "/retry":
                 n = self.db.execute("UPDATE items SET status='approved', approved_at=?, error=NULL "
                                     "WHERE status='failed' AND files IS NOT NULL", (time.time(),)).rowcount
@@ -1381,6 +1487,14 @@ class Bot:
 
     # ---- posting
     def maybe_post(self):
+        for row in self.db.execute("SELECT * FROM items WHERE status='manual_req'").fetchall():
+            try:
+                self.send_manual(row)
+            except Exception as e:
+                log.exception("manual package failed")
+                self.db.execute("UPDATE items SET status='failed', error=? WHERE media_id=?", (str(e), row["media_id"]))
+                self.db.commit()
+                self.report_failure(row, "preparing files to send you", e)
         if self.cfg.get("manual_mode"):
             for row in self.db.execute("SELECT * FROM items WHERE status='approved' ORDER BY approved_at").fetchall():
                 try:
@@ -1389,7 +1503,7 @@ class Bot:
                     log.exception("manual package failed")
                     self.db.execute("UPDATE items SET status='failed', error=? WHERE media_id=?", (str(e), row["media_id"]))
                     self.db.commit()
-                    self.tg.text(f"⚠️ Couldn't prepare {row['permalink']} for manual posting:\n{e}\nSend /retry to try again.")
+                    self.report_failure(row, "preparing files to send you", e)
             return
         gap = self.cfg["min_minutes_between_posts"] * 60
         last = float(kv_get(self.db, "last_post", 0))
@@ -1402,9 +1516,11 @@ class Bot:
         row = self.db.execute("SELECT * FROM items WHERE status='approved' ORDER BY approved_at LIMIT 1").fetchone()
         if not row:
             return
+        stage = "preparing the video"
         try:
-            files = json.loads(row["files"])
-            if any(f.get("path") and not os.path.exists(f["path"]) for f in files) and row["raw"]:
+            files = json.loads(row["files"]) if row["files"] else []
+            if (not files or any(f.get("path") and not os.path.exists(f["path"]) for f in files)) and row["raw"]:
+                stage = "downloading / editing the video"
                 raw = self.fresh_raw(row) if row["media_type"] != "STORY" else json.loads(row["raw"])
                 log.info("rebuilding media for %s", row["media_id"])
                 if row["media_type"] == "STORY":
@@ -1415,7 +1531,11 @@ class Bot:
             cap = row["caption"] or ""
             if row["media_type"] != "STORY" and self.cfg.get("add_footer_to_edited", True):
                 cap = finalize_caption(cap, self.cfg)
+            if not files:
+                raise RuntimeError("no video files and no saved details to rebuild them")
+            stage = "uploading to Instagram"
             pid = self.ig.publish_item(row["media_type"], files, cap)
+            stage = "getting the new post's link (it may already be posted - check the store page)"
             link = self.ig.get(pid, fields="permalink").get("permalink", "")
             self.db.execute("UPDATE items SET status='posted', posted_at=?, posted_id=? WHERE media_id=?",
                             (time.time(), pid, row["media_id"]))
@@ -1428,12 +1548,9 @@ class Bot:
         except Exception as e:
             log.exception("publish failed")
             self.db.execute("UPDATE items SET status='failed', error=? WHERE media_id=?", (str(e), row["media_id"]))
-            kv_set(self.db, "last_post", time.time() - gap + 300)   # retry others after 5 min
-            if "API access blocked" in str(e):
-                kv_set(self.db, "paused", "1")
-                self.tg.text("⛔ Meta has blocked the bot's API access, so I've paused the bot to avoid making it worse. "
-                             "Nothing will be checked or posted until you send /resume.")
-            self.tg.text(f"⚠️ Posting failed for {row['permalink']}\n{e}\n\nSend /retry to try again.")
+            kv_set(self.db, "last_post", time.time() - gap + 120)   # next item after 2 min
+            self.db.commit()
+            self.report_failure(row, stage, e)
         self.db.commit()
 
     def maybe_refresh(self):
@@ -1477,9 +1594,14 @@ class Bot:
         setup_mode = self.tg.chat.startswith("PUT_")
         if setup_mode:
             log.warning("telegram_chat_id not set - send /id to your bot in Telegram to get it")
+        if run_minutes and not is_active_hours(self.cfg):
+            log.info("night time (IST %s) - bot is off until %s:00", ist_now().strftime("%H:%M"),
+                     self.cfg.get("active_hours_ist", [6, 22])[0])
+            return
         while True:
+            slot = last_check_slot(self.cfg)
             if (not setup_mode and not (self.cfg.get("paused") or kv_get(self.db, "paused") == "1")
-                    and time.time() - float(kv_get(self.db, "last_poll", 0)) > self.cfg["poll_minutes"] * 60):
+                    and slot and float(kv_get(self.db, "last_poll", 0)) < slot):
                 kv_set(self.db, "last_poll", time.time())
                 self.maybe_refresh()
                 self.check_sources()
@@ -1507,7 +1629,7 @@ class Bot:
             kv_set(self.db, "tg_offset", self.tg.offset)
             if not setup_mode:
                 self.maybe_post()
-            if once or (stop_at and time.time() > stop_at):
+            if once or (stop_at and time.time() > stop_at) or (run_minutes and not is_active_hours(self.cfg)):
                 break
 
 
