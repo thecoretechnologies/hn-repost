@@ -1,13 +1,14 @@
 From https://github.com/thecoretechnologies/hn-repost
  * branch            state      -> FETCH_HEAD
  * [new branch]      state      -> origin/state
-== debug_token: {"data": {"app_id": "1847093469932687", "type": "PAGE", "application": "HN Store Poster", "data_access_expires_at": 1803046737, "expires_at": 0, "is_valid": true, "issued_at": 1795270773, "profile_id": "1535789706276956", "scopes": ["pages_show_list", "business_management", "instagram_basic", "instagram_manage_insights", "instagram_content_publish", "pages_read_engagement", "public_profile"], "granular_scopes": [{"scope": "pages_show_list"}, {"scope": "business_management"}, {"scope": "instagram_basic"}, {"scope": "instagram_manage_insights"}, {"scope": "instagram_content_publish"}, {"scope": "pages_read_engagement"}], "user_id": "2961772317516256"}}
-== me: {"id": "1535789706276956", "name": "Hooda Nutrition Uttam Nagar"}
-== app: {"name": "HN Repost Bot", "link": "https://www.facebook.com/games/?app_id=1084388714287870", "id": "1084388714287870"}
-== page: {"name": "Hooda Nutrition Uttam Nagar", "verification_status": "not_verified", "id": "1535789706276956"}
-== store ig: {"id": "17841451199740926", "followers_count": 152, "media_count": 15, "username": "hoodanutrition_un"}
-== store media: {"data": [{"id": "18085102904393120", "timestamp": "2026-11-21T10:40:44+0000"}, {"id": "18121577468092204", "timestamp": "2026-11-19T08:45:37+0000"}], "paging": {"cursors": {"before": "QVFIVE1CMW9wVkx2dGhEQXpwcXBKUHJ3XzNTVG1nV042Q3VQbXVQS3A4NDNsbE5hU1VCT3FnOFFtWC02akJZAcGEzUTkxd2Jwd2REM1BVR1RwTWVFR1VpYnpR", "after": "QVFIVGFtbHQ0TmlBNE5KU19XYXRiS1B2LU5HQ1lBU05tLXphclBrVnNRLVlPX2JVZAXNPQ3VXaG9jNmtNX0F0QW1oRlNlYXppdE1faWhDWk5kOG5VOFdPb1hR"}, "next": "https://graph.facebook.com/v27.0/17841451199740926/media?fields=id%2Ctimestamp&limit=2&access_token=<token>&after=QVFIVGFtbHQ0TmlBNE5KU19XYXRiS1B2LU5HQ1lBU05tLXphclBrVnNRLVlPX2JVZAXNPQ3VXaG9jNmtNX0F0QW1oRlNlYXppdE1faWhDWk5kOG5VOFdPb1hR"}}
-== publish limit: {"data": [{"quota_usage": 0, "config": {"quota_total": 100, "quota_duration": 86400}}]}
-== discovery official: {"id": "17841451199740926", "business_discovery": {"id": "17841465130364590", "media_count": 2982, "username": "hoodanutrition_official", "media": {"data": [{"id": "18503903275103268", "permalink": "https://www.instagram.com/reel/DgAFxm5ODk7/", "timestamp": "2026-11-21T11:12:02+0000"}, {"id": "18646657588021463", "permalink": "https://www.instagram.com/reel/Df_-JglO4pG/", "timestamp": "2026-11-21T10:05:10+0000"}, {"id": "18115116833270379", "permalink": "https://www.instagram.com/reel/Df_Tuy4MKCn/", "timestamp": "2026-11-21T03:54:03+0000"}], "paging": {"cursors": {"after": "QVFIVGFIVWVWeDQ0TlRteklDbGdzSjN2Wml0T3FPQkNrWl9NbzIwWDlFaG9nVFdwcUdPNDZAhWnlKRDZAJY05KVlczLXNQQ0JiaTNfalI4eE55bXUxMkkxOEdB"}}}}}
-== discovery fitharyanvi: {"id": "17841451199740926", "business_discovery": {"id": "17841452882473123", "media_count": 1293, "username": "fitharyanvi", "media": {"data": [{"id": "18095430428197499", "permalink": "https://www.instagram.com/reel/Df_7AIVSSDT/", "timestamp": "2026-11-21T09:37:53+0000"}, {"id": "18032735138877620", "permalink": "https://www.instagram.com/reel/Df7AhhSysdz/", "timestamp": "2026-11-19T11:48:53+0000"}, {"id": "18131303827879100", "permalink": "https://www.instagram.com/reel/Df4G0FbSwmf/", "timestamp": "2026-11-18T08:46:46+0000"}], "paging": {"cursors": {"after": "QVFIVGhOYWdlN0dyVFNHUTI2UmI5anl2Tlp5clJxOWdCZAHVwOVYzZADhZASnI3RkJZARUh5VnNkZA2lnNGMzMWRLSFlfRFVvd25ldU5LbDNsTFQ3di11WEFPdXVR"}}}}}
+ERROR: [Instagram] Df_-JglO4pG: This content isn't available to everyone: It can't be seen by certain audiences.
+API https://www.instagram.com/reel/DgAFxm5ODk7/ [('video', 'h264'), ('audio', 'aac')]
+API https://www.instagram.com/reel/Df_-JglO4pG/ [('video', 'h264')]
+API https://www.instagram.com/reel/Df_Tuy4MKCn/ [('video', 'h264'), ('audio', 'aac')]
+API https://www.instagram.com/p/Df-HOJznx0e/ [('video', 'mjpeg')]
+API https://www.instagram.com/reel/Df9lKvwu0bF/ [('video', 'h264'), ('audio', 'aac')]
+API https://www.instagram.com/reel/Df9W9gxS5MQ/ [('video', 'h264'), ('audio', 'aac')]
+API https://www.instagram.com/reel/Df8qqopMv2Q/ [('video', 'h264'), ('audio', 'aac')]
+API https://www.instagram.com/reel/Df7VxBet56T/ [('video', 'h264'), ('audio', 'aac')]
+YTDLP Df_-JglO4pG download failed
 exit 0
