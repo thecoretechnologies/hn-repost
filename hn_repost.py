@@ -884,7 +884,14 @@ class Bot:
                         self.db.execute("UPDATE items SET status='on_store' WHERE media_id=?", (m["id"],))
                         self.db.commit(); continue
                     found += 1
-                    self.prepare(m, user, auto=self.cfg.get("auto_post_new", False))
+                    auto = self.cfg.get("auto_post_new", False)
+                    try:   # only auto-post fresh reels; older backlog comes for review instead
+                        age_h = (datetime.now(timezone.utc) - datetime.strptime(m["timestamp"], "%Y-%m-%dT%H:%M:%S%z")).total_seconds() / 3600
+                        if age_h > self.cfg.get("auto_post_max_age_hours", 6):
+                            auto = False
+                    except Exception:
+                        pass
+                    self.prepare(m, user, auto=auto)
         if first_run:
             kv_set(self.db, "initialised", datetime.now(timezone.utc).isoformat())
             self.tg.text("✅ Repost bot is running. Existing posts were skipped; new ones will come here for approval.")

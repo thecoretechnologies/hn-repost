@@ -128,5 +128,6 @@
     6,
     22
   ],
-  "reauth_by": "2027-02-18"
+  "reauth_by": "2027-02-18",
+  "auto_post_max_age_hours": 6
 }
