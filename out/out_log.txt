@@ -1,5 +1,12 @@
 From https://github.com/thecoretechnologies/hn-repost
  * branch            state      -> FETCH_HEAD
  * [new branch]      state      -> origin/state
-size 3475810
+== debug_token: {"error": {"message": "API access blocked.", "type": "OAuthException", "code": 200, "error_subcode": 5258005}}
+== me: {"error": {"message": "API access blocked.", "code": 200, "type": "OAuthException", "error_subcode": 5258005}}
+== app: {"error": {"message": "API access blocked.", "type": "OAuthException", "code": 200, "error_subcode": 5258005}}
+== page: {"error": {"message": "API access blocked.", "type": "OAuthException", "code": 200, "error_subcode": 5258005}}
+== store ig: {"error": {"message": "API access blocked.", "code": 200, "type": "OAuthException", "error_subcode": 5258005}}
+== store media: {"error": {"message": "API access blocked.", "code": 200, "type": "OAuthException", "error_subcode": 5258005}}
+== publish limit: {"error": {"message": "API access blocked.", "code": 200, "type": "OAuthException", "error_subcode": 5258005}}
+== discovery: {"error": {"message": "API access blocked.", "code": 200, "type": "OAuthException", "error_subcode": 5258005}}
 exit 0
