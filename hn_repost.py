@@ -222,27 +222,91 @@ class IG:
     def tok(self):
         return self.cfg["access_token"]
 
+    # ---- protection against Meta rate limits / blocks
+    kv_get = kv_set = None          # set by Bot so limits survive between runs
+    _last_call = 0.0
+    RATE_CODES = {4, 17, 32, 613, 80001, 80002}                 # "too many calls"
+    BLOCK_CODES = {368}                                         # temporarily blocked for policy/spam
+    BLOCK_SUBCODES = {5258005, 2207051, 2207050, 2207053}       # API blocked / action blocked / restricted
+
+    def _guard(self):
+        g = self.cfg.get("api_safety", {})
+        if self.kv_get:
+            until = float(self.kv_get("api_cooldown_until") or 0)
+            if time.time() < until:
+                raise RuntimeError("Protective pause: not calling Instagram until "
+                                   + datetime.fromtimestamp(until, IST).strftime("%d %b %I:%M %p")
+                                   + f" ({self.kv_get('api_cooldown_reason') or 'Meta warning'})")
+            day = ist_now().strftime("%Y-%m-%d")
+            key = f"api_calls:{day}"
+            n = int(self.kv_get(key) or 0) + 1
+            if n > g.get("daily_call_cap", 200):
+                raise RuntimeError(f"Daily safety cap of {g.get('daily_call_cap', 200)} Instagram API calls reached - "
+                                   "resuming tomorrow")
+            self.kv_set(key, n)
+        wait = g.get("min_seconds_between_calls", 3) - (time.time() - IG._last_call)
+        if wait > 0:
+            time.sleep(wait)
+        IG._last_call = time.time()
+
+    def _cooldown(self, hours, reason):
+        if not self.kv_set:
+            return
+        until = time.time() + hours * 3600
+        if until > float(self.kv_get("api_cooldown_until") or 0):
+            self.kv_set("api_cooldown_until", until)
+            self.kv_set("api_cooldown_reason", reason)
+            self.kv_set("api_cooldown_notify", 1)
+
+    def _usage(self, r):
+        """Meta reports how close the app is to its limits in response headers - slow down early."""
+        pct = 0
+        for h in ("x-app-usage", "x-business-use-case-usage", "x-page-usage"):
+            v = r.headers.get(h)
+            if not v:
+                continue
+            try:
+                j = json.loads(v)
+                vals = [j] if "call_count" in j else [x for lst in j.values() for x in lst]
+                for x in vals:
+                    pct = max(pct, *(int(x.get(k, 0) or 0) for k in ("call_count", "total_cputime", "total_time")))
+            except Exception:
+                pass
+        if pct >= 90:
+            self._cooldown(6, f"Meta usage at {pct}% of the limit")
+        elif pct >= 75:
+            self._cooldown(1, f"Meta usage at {pct}% of the limit")
+
     def _check(self, r):
+        self._usage(r)
         try:
             j = r.json()
         except Exception:
             r.raise_for_status(); raise
         if "error" in j:
             e = j["error"]
+            code, sub = e.get("code"), e.get("error_subcode")
+            if code in self.RATE_CODES:
+                self._cooldown(self.cfg.get("api_safety", {}).get("rate_limit_pause_hours", 2), "Meta rate limit")
+            elif code in self.BLOCK_CODES or sub in self.BLOCK_SUBCODES:
+                self._cooldown(self.cfg.get("api_safety", {}).get("block_pause_hours", 24),
+                               f"Meta blocked an action (code {code}/{sub})")
             detail = " - ".join(x for x in (e.get("error_user_title"), e.get("error_user_msg")) if x)
             raise RuntimeError(f"Graph API: {e.get('message')} (code {e.get('code')}/{e.get('error_subcode')})"
                                + (f": {detail}" if detail else ""))
         return j
 
     def get(self, path, **params):
+        self._guard()
         params["access_token"] = self.tok
         return self._check(requests.get(f"{self.g}/{path}", params=params, timeout=60))
 
     def post(self, path, **params):
+        self._guard()
         params["access_token"] = self.tok
         return self._check(requests.post(f"{self.g}/{path}", data=params, timeout=120))
 
-    def recent_media(self, username, limit=12, stats=False):
+    def recent_media(self, username, limit=8, stats=False):
         extra = ",like_count,comments_count,view_count" if stats else ""
         fields = ("business_discovery.username(%s){media.limit(%d){id,caption,media_type,media_product_type,"
                   "media_url,thumbnail_url,permalink,timestamp%s,children{media_type,media_url}}}" % (username, limit, extra))
@@ -254,7 +318,7 @@ class IG:
             j = self.get(self.cfg["ig_user_id"], fields=fields.replace(",view_count", ""))
         return j.get("business_discovery", {}).get("media", {}).get("data", [])
 
-    def find_by_code(self, username, code, max_items=300):
+    def find_by_code(self, username, code, max_items=100):
         """Look through an account's posts (business/creator accounts) for the post with this shortcode."""
         after, seen = None, 0
         base = ("id,caption,media_type,media_product_type,media_url,thumbnail_url,permalink,timestamp,"
@@ -808,6 +872,8 @@ class Bot:
         self.cfg = load_config(cfg_path)
         self.db = open_db(self.cfg)
         self.ig = IG(self.cfg, cfg_path)
+        self.ig.kv_get = lambda k: kv_get(self.db, k)
+        self.ig.kv_set = lambda k, v: kv_set(self.db, k, v)
         self.tg = TG(self.cfg)
         self.editing = None   # media_id waiting for a new caption
         if self.cfg.get("manual_mode"):
@@ -1385,7 +1451,9 @@ class Bot:
             row = self.row(mid)
             log.info("button %s on %s (status %s)", act, mid, row["status"] if row else None)
             note = ""
-            if act == "rt" and row and row["status"] not in ("posted",):
+            if act == "rt" and row and int(kv_get(self.db, f"attempts:{mid}", 0)) >= self.cfg.get("max_attempts_per_reel", 4):
+                note = "Tried too many times - use 📥 Send files to post it yourself"
+            elif act == "rt" and row and row["status"] not in ("posted",):
                 self.db.execute("UPDATE items SET status='approved', approved_at=0, error=NULL WHERE media_id=?", (mid,))
                 kv_set(self.db, "last_post", 0)
                 note = "Retrying now - you'll get the result in a few minutes"
@@ -1516,6 +1584,15 @@ class Bot:
         last = float(kv_get(self.db, "last_post", 0))
         if time.time() - last < gap:
             return
+        day_start = ist_now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+        posted_today = self.db.execute("SELECT COUNT(*) FROM items WHERE status='posted' AND posted_at>=?",
+                                       (day_start,)).fetchone()[0]
+        if posted_today >= self.cfg.get("max_posts_per_day", 8):
+            if kv_get(self.db, "cap_note") != ist_now().strftime("%Y-%m-%d"):
+                kv_set(self.db, "cap_note", ist_now().strftime("%Y-%m-%d"))
+                self.tg.text(f"🛡 Daily limit of {self.cfg.get('max_posts_per_day', 8)} posts reached - remaining "
+                             "reels will post tomorrow (or tap 📥 Send files to post them yourself).")
+            return
         auto = self.cfg.get("auto_post_after_minutes", 0)
         if auto:
             self.db.execute("UPDATE items SET status='approved', approved_at=? WHERE status='pending' AND created<?",
@@ -1618,7 +1695,17 @@ class Bot:
                      self.cfg.get("active_hours_ist", [6, 22])[0])
             return
         while True:
+            if kv_get(self.db, "api_cooldown_notify") == "1":
+                kv_set(self.db, "api_cooldown_notify", 0)
+                until = datetime.fromtimestamp(float(kv_get(self.db, "api_cooldown_until", 0)), IST)
+                self.tg.text(f"🛡 Safety pause: {kv_get(self.db, 'api_cooldown_reason')}. To avoid a block, the bot "
+                             f"won't call Instagram until {until.strftime('%d %b %I:%M %p')}. Telegram and pasted links "
+                             "(review/send files) keep working; posting resumes automatically.")
             slot = last_check_slot(self.cfg)
+            if slot:   # spread checks a few minutes after the hour so they don't look robotic
+                slot += int(hashlib.md5(str(int(slot)).encode()).hexdigest(), 16) % (self.cfg.get("check_jitter_minutes", 15) * 60)
+                if slot > time.time():
+                    slot = None
             if (not setup_mode and not (self.cfg.get("paused") or kv_get(self.db, "paused") == "1")
                     and slot and float(kv_get(self.db, "last_poll", 0)) < slot):
                 kv_set(self.db, "last_poll", time.time())

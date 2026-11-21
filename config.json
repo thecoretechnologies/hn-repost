@@ -10,7 +10,7 @@
     "hoodanutrition_official",
     "fitharyanvi"
   ],
-  "min_minutes_between_posts": 10,
+  "min_minutes_between_posts": 30,
   "auto_post_after_minutes": 0,
   "skip_existing_on_first_run": true,
   "outro_path": "assets/outro.mp4",
@@ -58,7 +58,7 @@
   "best_per_day": 2,
   "best_hour_ist": 11,
   "best_min_age_days": 1,
-  "best_scan_limit": 60,
+  "best_scan_limit": 30,
   "footer_marker": "📍 Hooda Nutrition, Uttam Nagar",
   "caption_footer": [
     "📞 WhatsApp: 8527150060, 8527150040",
@@ -129,5 +129,14 @@
     22
   ],
   "reauth_by": "2027-02-18",
-  "auto_post_max_age_hours": 6
+  "auto_post_max_age_hours": 6,
+  "max_posts_per_day": 8,
+  "check_jitter_minutes": 15,
+  "max_attempts_per_reel": 4,
+  "api_safety": {
+    "daily_call_cap": 200,
+    "min_seconds_between_calls": 3,
+    "rate_limit_pause_hours": 2,
+    "block_pause_hours": 24
+  }
 }
