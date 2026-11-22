@@ -24,7 +24,7 @@ permissions:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
 
@@ -92,14 +92,20 @@ jobs:
           git -c user.name=hn-bot -c user.email=hn-bot@users.noreply.github.com commit -qm "state $(date -u +%FT%TZ)"
           git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" state
 
-      - name: Queue next run (keeps the bot running between scheduled runs)
+      - name: Night wait (sleep until 6am India time, then hand over to a fresh run)
+        if: always()
+        run: |
+          H=$(TZ=Asia/Kolkata date +%-H)
+          if [ "$H" -ge 22 ] || [ "$H" -lt 6 ]; then
+            NOW=$(date +%s)
+            WAKE=$(TZ=Asia/Kolkata date -d "$( [ "$H" -ge 22 ] && echo tomorrow || echo today ) 06:00" +%s)
+            SECS=$(( WAKE - NOW )); MAX=$(( 340 * 60 ))
+            [ "$SECS" -gt "$MAX" ] && SECS=$MAX
+            echo "night time - sleeping $((SECS/60)) minutes"; sleep "$SECS"
+          fi
+
+      - name: Queue next run (keeps the bot running day and night; it sleeps 10pm-6am)
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          H=$(TZ=Asia/Kolkata date +%H)
-          if [ "$H" -ge 6 ] && [ "$H" -lt 22 ]; then
-            gh workflow run bot.yml -R "${{ github.repository }}" --ref main || true
-          else
-            echo "night time in India ($H:xx) - not queuing; the 6am schedule restarts the bot"
-          fi
+        run: gh workflow run bot.yml -R "${{ github.repository }}" --ref main || true
