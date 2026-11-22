@@ -138,5 +138,7 @@
     "min_seconds_between_calls": 3,
     "rate_limit_pause_hours": 2,
     "block_pause_hours": 24
-  }
+  },
+  "ignore_older_than_days": 3,
+  "use_oembed": false
 }

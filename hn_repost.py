@@ -949,6 +949,13 @@ class Bot:
                     if self.already_on_store(m):
                         self.db.execute("UPDATE items SET status='on_store' WHERE media_id=?", (m["id"],))
                         self.db.commit(); continue
+                    try:   # pinned or resurfaced old reels: remember them silently, don't bother you
+                        age_d = (datetime.now(timezone.utc) - datetime.strptime(m["timestamp"], "%Y-%m-%dT%H:%M:%S%z")).days
+                        if age_d > self.cfg.get("ignore_older_than_days", 3):
+                            self.db.execute("UPDATE items SET status='old_skipped' WHERE media_id=?", (m["id"],))
+                            self.db.commit(); continue
+                    except (KeyError, ValueError):
+                        pass
                     found += 1
                     auto = self.cfg.get("auto_post_new", False)
                     try:   # only auto-post fresh reels; older backlog comes for review instead
@@ -1202,6 +1209,8 @@ class Bot:
     def resolve_owner(self, url, code):
         """Work out which account posted a link: Meta's oEmbed endpoint first, then the public post page."""
         try:
+            if not self.cfg.get("use_oembed", False):   # needs Meta app review; skip to save API calls
+                raise RuntimeError("oEmbed disabled")
             j = self.ig.get("instagram_oembed", url=url, omitscript="true")
             name = j.get("author_name") or ""
             if re.fullmatch(r"[\w.]+", name):
